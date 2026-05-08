@@ -1,0 +1,72 @@
+report:
+  title: "투자 영향도 데일리 리포트"
+  timezone: "Asia/Seoul"
+  schedule_time: "07:45"
+  max_articles: 10
+  recommended_min_articles: 5
+  recommended_max_articles: 7
+  min_impact_score: 2
+  duplicate_threshold: 0.72
+
+market_tickers:
+  indices:
+    KOSPI:
+      symbol: "^KS11"
+    KOSDAQ:
+      symbol: "^KQ11"
+    NASDAQ:
+      symbol: "^IXIC"
+    SOX:
+      symbol: "^SOX"
+  rates:
+    USD/KRW:
+      symbol: "KRW=X"
+    US10Y:
+      symbol: "^TNX"
+      scale: 0.1
+    DXY:
+      symbol: "DX-Y.NYB"
+  commodities:
+    WTI:
+      symbol: "CL=F"
+    Gold:
+      symbol: "GC=F"
+    Copper:
+      symbol: "HG=F"
+  risks:
+    VIX:
+      symbol: "^VIX"
+    Bitcoin:
+      symbol: "BTC-USD"
+
+news_sources:
+  - name: "네이버 금융 주요뉴스"
+    provider: "naver_finance"
+    market: "domestic"
+    method: "html"
+    url: "https://finance.naver.com/news/mainnews.naver"
+    enabled: true
+  - name: "네이버 증권 뉴스"
+    provider: "naver_stock"
+    market: "domestic"
+    method: "html"
+    url: "https://m.stock.naver.com/news/mainnews"
+    enabled: true
+  - name: "Yahoo Finance"
+    provider: "yahoo_finance"
+    market: "overseas"
+    method: "rss"
+    url: "https://finance.yahoo.com/news/rssindex"
+    enabled: true
+  - name: "Reuters Markets"
+    provider: "reuters"
+    market: "overseas"
+    method: "html"
+    url: "https://www.reuters.com/markets/"
+    enabled: true
+  - name: "CNBC Markets"
+    provider: "cnbc"
+    market: "overseas"
+    method: "rss"
+    url: "https://www.cnbc.com/id/100003114/device/rss/rss.html"
+    enabled: true
