@@ -1,10 +1,10 @@
 name: Daily Stock Report
 
-on:
+"on":
+  workflow_dispatch:
   schedule:
     # 07:45 KST on weekdays = 22:45 UTC on Sunday-Thursday.
     - cron: "45 22 * * 0-4"
-  workflow_dispatch:
 
 permissions:
   contents: read
