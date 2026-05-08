@@ -11,6 +11,23 @@ class DiscordWebhookClient:
         self.webhook_url = webhook_url
 
     def send_text(self, content: str) -> None:
+        self._send_text_chunks(content)
+
+    def send_text_with_files(self, content: str, file_paths: list[Path]) -> None:
+        if not file_paths:
+            self._send_text_chunks(content)
+            return
+
+        self._send_file_batches(file_paths)
+
+        summary, links = _split_summary_and_links(content)
+        self._send_text_chunks(summary)
+        self._send_text_chunks(links)
+
+    def _send_text_chunks(self, content: str) -> None:
+        if not content.strip():
+            return
+
         for chunk in _split_for_discord(content):
             response = requests.post(
                 self.webhook_url,
@@ -19,18 +36,9 @@ class DiscordWebhookClient:
             )
             response.raise_for_status()
 
-    def send_text_with_files(self, content: str, file_paths: list[Path]) -> None:
-        chunks = _split_for_discord(content)
-        for chunk in chunks[:-1]:
-            response = requests.post(
-                self.webhook_url,
-                json={"content": chunk},
-                timeout=15,
-            )
-            response.raise_for_status()
-
-        for batch_index, batch in enumerate(_chunks(file_paths, 10)):
-            payload = {"content": chunks[-1] if batch_index == 0 else ""}
+    def _send_file_batches(self, file_paths: list[Path]) -> None:
+        for batch in _chunks(file_paths, 10):
+            payload = {"content": ""}
             files = []
             handles = []
             try:
@@ -49,6 +57,17 @@ class DiscordWebhookClient:
             finally:
                 for handle in handles:
                     handle.close()
+
+
+def _split_summary_and_links(content: str) -> tuple[str, str]:
+    marker = "🔗 기사 원문 링크"
+    marker_index = content.find(marker)
+    if marker_index == -1:
+        return content.strip(), ""
+
+    summary = content[:marker_index].strip()
+    links = content[marker_index:].strip()
+    return summary, links
 
 
 def _split_for_discord(content: str, limit: int = 1900) -> list[str]:
