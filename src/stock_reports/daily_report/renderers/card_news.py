@@ -8,7 +8,7 @@ from html import escape
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from stock_reports.daily_report.models import DailyReport, MarketDataPoint, NewsArticle, ThemeScore
+from stock_reports.daily_report.models import DailyReport, MarketDataPoint, NewsArticle, ResearchChange, ThemeScore
 
 
 CARD_WIDTH = 1080
@@ -102,6 +102,44 @@ URL_MISMATCH_GROUPS = (
     {"credit", "card", "cards", "banking", "checking", "savings", "insurance", "personal"},
 )
 
+POSITIVE_KEYWORDS = (
+    "강세",
+    "개선",
+    "확대",
+    "매수세",
+    "매수 심리",
+    "외국인 순매수",
+    "금리 하락",
+    "달러 약세",
+)
+
+NEGATIVE_KEYWORDS = (
+    "약세",
+    "하락",
+    "위험회피",
+    "리스크",
+    "변동성",
+    "금리 상승",
+    "달러 강세",
+    "관망",
+)
+
+THEME_KEYWORDS = (
+    "AI반도체",
+    "AI 반도체",
+    "HBM",
+    "전력설비",
+    "전력인프라",
+    "원전",
+    "ESS",
+    "우주항공",
+    "방산",
+    "성장주",
+    "반도체",
+)
+
+NEUTRAL_KEYWORDS = ("수급 확인", "선별 대응", "중립", "혼조")
+
 
 @dataclass(frozen=True)
 class CardPage:
@@ -190,10 +228,20 @@ class CardNewsRenderer:
                 number_offset=len(domestic_articles),
             )
         )
+        if report.research_changes:
+            pages.append(
+                CardPage(
+                    "research-page",
+                    self._research_page(
+                        changes=report.research_changes,
+                        page_number=len(pages) + 1,
+                    ),
+                )
+            )
         return pages
 
     def _cover_page(self, report: DailyReport) -> str:
-        insight = _cover_insight(report)
+        insight = _cover_insight_html(report)
         date_text = report.generated_at.strftime("%Y.%m.%d")
         return f"""
         <section class="frame">
@@ -203,7 +251,7 @@ class CardNewsRenderer:
             <div class="cover-date">{escape(date_text)}</div>
             <div class="hero-card">
               <span class="hero-label">오늘 시장 한줄 판단</span>
-              <p class="hero-text">{escape(insight)}</p>
+              <p class="hero-text">{insight}</p>
             </div>
           </div>
           <div class="footer">
@@ -294,22 +342,54 @@ class CardNewsRenderer:
 
         return pages
 
+    def _research_page(self, changes: list[ResearchChange], page_number: int) -> str:
+        cards = []
+        for theme, theme_changes in _group_research_changes(changes).items():
+            items = "".join(
+                f"""
+                <div class="research-item">
+                  <span class="research-broker">{escape(change.broker)}</span>
+                  <p>{escape(change.summary)}</p>
+                  <span class="research-reason">{escape(change.reason)}</span>
+                </div>
+                """
+                for change in theme_changes[:2]
+            )
+            cards.append(
+                f"""
+                <article class="research-card">
+                  <span class="research-theme">{escape(theme)}</span>
+                  {items}
+                </article>
+                """
+            )
+
+        return f"""
+        <section class="frame">
+          {_page_header(f"{page_number:02d}", "오늘 리서치 변화", "기관 시각 변화가 감지된 테마만 요약")}
+          <div class="research-list">
+            {''.join(cards)}
+          </div>
+        </section>
+        """
+
 
 def build_discord_card_summary(report: DailyReport, image_paths: list[Path]) -> str:
-    insight = _cover_insight(report)
+    insight = _cover_insight_text(report)
     themes = ", ".join(theme.name for theme in report.theme_scores[:5]) or "주요 테마 산출 대기"
     total_articles = len(_valid_link_articles(report.domestic_articles)) + len(_valid_link_articles(report.overseas_articles))
-    return "\n".join(
-        [
-            f"📰 {report.title}",
-            report.generated_at.strftime("%Y-%m-%d %H:%M"),
-            "",
-            f"오늘 판단: {insight}",
-            f"강세 예상 테마: {themes}",
-            f"선별 기사: {total_articles}개",
-            f"카드뉴스: {len(image_paths)}장 첨부",
-        ]
-    )
+    lines = [
+        f"📰 {report.title}",
+        report.generated_at.strftime("%Y-%m-%d %H:%M"),
+        "",
+        f"오늘 판단: {insight}",
+        f"강세 예상 테마: {themes}",
+        f"선별 기사: {total_articles}개",
+        f"카드뉴스: {len(image_paths)}장 첨부",
+    ]
+    if report.research_changes:
+        lines.append(f"리서치 변화: {len(report.research_changes)}건")
+    return "\n".join(lines)
 
 
 def _page_header(number: str, title: str, subtitle: str) -> str:
@@ -329,7 +409,7 @@ def _metric_row(point: MarketDataPoint | None, fallback_name: str) -> str:
         return f"""
         <div class="metric-row">
           <span class="metric-name">{escape(fallback_name)}</span>
-          <span class="metric-value">-</span>
+          <span class="metric-value flat">-</span>
         </div>
         """
 
@@ -345,7 +425,7 @@ def _metric_row(point: MarketDataPoint | None, fallback_name: str) -> str:
     return f"""
     <div class="metric-row">
       <span class="metric-name">{escape(point.name)}</span>
-      <span class="metric-value">
+      <span class="metric-value {change_class}">
         {point.value:,.2f}
         <span class="metric-change {change_class}">{escape(change_text)}</span>
       </span>
@@ -390,113 +470,186 @@ def _news_card(article: NewsArticle, number: int) -> str:
 
 
 def _cover_insight(report: DailyReport) -> str:
-    generated_lines = _summarize_market_points(report.market_snapshot.points)
-    if generated_lines:
-        return generated_lines[0]
-
-    if report.market_snapshot.summary_lines:
-        return report.market_snapshot.summary_lines[0]
-
-    return "장 초반 수급과 핵심 테마 확인 필요"
+    return _cover_insight_text(report)
 
 
-def _summarize_market_points(points: list[MarketDataPoint]) -> list[str]:
-    by_name = {point.name: point for point in points}
-
-    nasdaq = _change(by_name, "NASDAQ")
-    sox = _change(by_name, "SOX")
-    vix = _change(by_name, "VIX")
-    us10y = _change(by_name, "US10Y")
-    dxy = _change(by_name, "DXY")
-    usdkrw = _change(by_name, "USD/KRW")
-    copper = _change(by_name, "Copper")
-    wti = _change(by_name, "WTI")
-    bitcoin = _change(by_name, "Bitcoin")
-
-    if not any(value is not None for value in (nasdaq, sox, vix, us10y, dxy, usdkrw, copper, wti, bitcoin)):
-        return []
-
-    risk_on = _positive(nasdaq) + _positive(sox) + _negative(vix)
-    risk_off = _above(vix, 2) or _below(nasdaq, -0.7) or _above(us10y, 1) or _above(usdkrw, 0.5)
-
-    cause = _market_cause(us10y=us10y, dxy=dxy, usdkrw=usdkrw, nasdaq=nasdaq, sox=sox, wti=wti, copper=copper, vix=vix)
-    flow = _market_flow(nasdaq=nasdaq, sox=sox, vix=vix, us10y=us10y, usdkrw=usdkrw, bitcoin=bitcoin)
-    themes = _market_themes(nasdaq=nasdaq, sox=sox, us10y=us10y, copper=copper, wti=wti, risk_off=risk_off)
-
-    if risk_off and risk_on < 2:
-        return [f"{cause}로 {flow}가 커지며 {themes} 중심의 선별 대응이 필요합니다."]
-    return [f"{cause}로 {flow}가 확대되며 {themes} 강세 가능성이 높습니다."]
+def _cover_insight_text(report: DailyReport) -> str:
+    return " ".join(_cover_insight_lines(report))
 
 
-def _market_cause(*, us10y, dxy, usdkrw, nasdaq, sox, wti, copper, vix) -> str:
+def _cover_insight_html(report: DailyReport) -> str:
+    return "<br />".join(_highlight_market_text(line) for line in _cover_insight_lines(report))
+
+
+def _cover_insight_lines(report: DailyReport) -> list[str]:
+    lines = _cover_summary_from_market_points(report.market_snapshot.points)
+    return lines[:2] or ["장 초반 지수·환율·수급 확인이 우선입니다."]
+
+
+def _cover_summary_from_market_points(points: list[MarketDataPoint]) -> list[str]:
+    changes = {point.name: point.change_pct for point in points if point.change_pct is not None}
+    if not changes:
+        return [
+            "시장 데이터 수집 대기 상태라 장 초반 지수·환율·수급 확인이 우선입니다.",
+            "뉴스 모멘텀과 거래대금이 붙는 업종을 먼저 선별해야 합니다.",
+        ]
+
+    cause = _cover_market_cause(changes)
+    themes = _cover_market_themes(changes)
+
+    if _cover_is_risk_off(changes):
+        return [
+            f"{cause}로 위험회피 심리가 커지고 있습니다.",
+            f"{themes} 중심의 선별 대응이 필요합니다.",
+        ]
+
+    flow, verb = _cover_money_flow(changes)
+    theme_reason = _cover_theme_reason(changes)
+    return [
+        f"{cause}로 {flow}가 {verb}.",
+        f"{theme_reason} {themes} 강세 가능성이 높습니다.",
+    ]
+
+
+def _cover_market_cause(changes: dict[str, float]) -> str:
     causes: list[str] = []
-    if us10y is not None and us10y <= 0:
+    us10y = _change(changes, "US10Y")
+    dxy = _change(changes, "DXY")
+    usdkrw = _change(changes, "USD/KRW")
+    sox = _change(changes, "SOX")
+    copper = _change(changes, "Copper")
+    wti = _change(changes, "WTI")
+    vix = _change(changes, "VIX")
+
+    if us10y <= -0.15:
+        causes.append("미국채 금리 하락")
+    elif us10y <= 0.1:
         causes.append("미국채 금리 안정")
-    elif _above(us10y, 1):
+    elif us10y >= 1:
         causes.append("미국채 금리 상승")
 
-    if _negative(dxy) or _below(usdkrw, -0.2):
+    if dxy < 0 or usdkrw <= -0.2:
         causes.append("달러 약세")
-    elif _above(dxy, 0.3) or _above(usdkrw, 0.5):
+    elif dxy >= 0.3 or usdkrw >= 0.5:
         causes.append("달러 강세")
 
-    if _above(sox, 0.5):
+    if sox >= 0.5:
         causes.append("AI 수요 기대")
-    elif _above(nasdaq, 0.5):
-        causes.append("미국 성장주 강세")
-
-    if _above(copper, 0.5):
-        causes.append("구리 강세")
-    if _above(wti, 0.8):
+    if copper >= 0.5:
+        causes.append("구리 가격 강세")
+    if wti >= 0.8:
         causes.append("유가 상승")
-    if _above(vix, 2):
+    if vix >= 2:
         causes.append("변동성 확대")
 
-    return _join_phrases(causes[:3]) if causes else "금리·환율 방향성 혼재"
+    if not causes:
+        return "금리·환율 방향성 혼재"
+    return _join_phrases(causes[:2])
 
 
-def _market_flow(*, nasdaq, sox, vix, us10y, usdkrw, bitcoin) -> str:
-    if _above(vix, 2) or _below(nasdaq, -0.7) or _above(us10y, 1) or _above(usdkrw, 0.5):
-        return "안전자산 선호와 성장주 관망 심리"
-    if _above(sox, 0.5):
-        return "반도체 중심 매수세"
-    if _above(nasdaq, 0.5) and us10y is not None and us10y <= 0:
-        return "성장주 선호"
-    if _negative(vix) and _positive(bitcoin):
-        return "위험자산 선호"
-    return "수급 확인 심리"
+def _cover_money_flow(changes: dict[str, float]) -> tuple[str, str]:
+    sox = _change(changes, "SOX")
+    nasdaq = _change(changes, "NASDAQ")
+    us10y = _change(changes, "US10Y")
+    usdkrw = _change(changes, "USD/KRW")
+    kospi = _change(changes, "KOSPI")
+    kosdaq = _change(changes, "KOSDAQ")
+    vix = _change(changes, "VIX")
+
+    if sox >= 0.5 and us10y <= 0.1:
+        return "성장주·반도체 매수 심리", "개선되고 있습니다"
+    if sox >= 0.5:
+        return "반도체 중심 매수세", "확대되고 있습니다"
+    if nasdaq >= 0.5 and us10y <= 0.1:
+        return "성장주 매수 심리", "개선되고 있습니다"
+    if usdkrw <= -0.2 and (kospi > 0 or kosdaq > 0):
+        return "외국인 순매수 기대", "커지고 있습니다"
+    if vix < 0:
+        return "성장주 매수 심리", "개선되고 있습니다"
+    return "장 초반 수급 확인 심리", "이어지고 있습니다"
 
 
-def _market_themes(*, nasdaq, sox, us10y, copper, wti, risk_off: bool) -> str:
+def _cover_theme_reason(changes: dict[str, float]) -> str:
+    if _change(changes, "SOX") >= 0.5:
+        return "AI 수요 기대가 이어지며"
+    if _change(changes, "Copper") >= 0.5:
+        return "구리 가격 강세가 이어지며"
+    if _change(changes, "WTI") >= 0.8:
+        return "유가 상승 영향으로"
+    return "뉴스 모멘텀이 이어지며"
+
+
+def _cover_market_themes(changes: dict[str, float]) -> str:
     themes: list[str] = []
-    if _above(sox, 0.5):
-        themes.extend(["AI반도체", "HBM"])
-    elif _above(nasdaq, 0.5) and us10y is not None and us10y <= 0:
+    if _change(changes, "SOX") >= 0.5:
+        themes.extend(["AI반도체", "HBM", "전력인프라"])
+    elif _change(changes, "NASDAQ") >= 0.5 and _change(changes, "US10Y") <= 0.1:
         themes.extend(["AI반도체", "성장주"])
 
-    if _above(copper, 0.5):
-        themes.extend(["전력설비", "전력인프라"])
-    if _above(wti, 0.8):
+    if _change(changes, "Copper") >= 0.5:
+        themes.append("전력설비")
+    if _change(changes, "WTI") >= 0.8:
         themes.append("에너지")
-    if risk_off and not themes:
+    if _cover_is_risk_off(changes) and not themes:
         themes.extend(["방산", "배당주"])
     if not themes:
-        themes.extend(["환율 민감주", "정책 테마"])
+        themes.extend(["AI반도체", "전력설비", "실적주"])
 
-    return "·".join(dict.fromkeys(themes[:4]))
+    return "·".join(dict.fromkeys(themes[:3]))
+
+
+def _cover_is_risk_off(changes: dict[str, float]) -> bool:
+    return (
+        _change(changes, "VIX") >= 2
+        or _change(changes, "NASDAQ") <= -0.7
+        or _change(changes, "US10Y") >= 1
+        or _change(changes, "USD/KRW") >= 0.5
+    )
+
+
+def _highlight_market_text(text: str) -> str:
+    keyword_classes = {
+        **{keyword: "market-hl-positive" for keyword in POSITIVE_KEYWORDS},
+        **{keyword: "market-hl-negative" for keyword in NEGATIVE_KEYWORDS},
+        **{keyword: "market-hl-theme" for keyword in THEME_KEYWORDS},
+        **{keyword: "market-hl-neutral" for keyword in NEUTRAL_KEYWORDS},
+    }
+    keywords = sorted(keyword_classes, key=len, reverse=True)
+
+    highlighted: list[str] = []
+    index = 0
+    while index < len(text):
+        matched = next((keyword for keyword in keywords if text.startswith(keyword, index)), None)
+        if matched:
+            css_class = keyword_classes[matched]
+            highlighted.append(f'<span class="market-hl {css_class}">{escape(matched)}</span>')
+            index += len(matched)
+            continue
+
+        highlighted.append(escape(text[index]))
+        index += 1
+
+    return "".join(highlighted)
 
 
 def _join_phrases(values: list[str]) -> str:
     if len(values) <= 1:
         return values[0] if values else "매크로 방향성 혼재"
-    if len(values) == 2:
-        return "과 ".join(values)
-    return f"{', '.join(values[:-1])} 및 {values[-1]}"
+    first, second = values[0], values[1]
+    particle = "과" if _has_final_consonant(first) else "와"
+    return f"{first}{particle} {second}"
 
 
-def _change(points: dict[str, MarketDataPoint], name: str) -> float | None:
-    point = points.get(name)
-    return None if point is None or point.change_pct is None else point.change_pct
+def _has_final_consonant(text: str) -> bool:
+    for character in reversed(text.strip()):
+        code = ord(character)
+        if 0xAC00 <= code <= 0xD7A3:
+            return (code - 0xAC00) % 28 != 0
+    return True
+
+
+def _change(points: dict[str, float], name: str) -> float:
+    return points.get(name, 0.0)
 
 
 def _positive(value: float | None) -> bool:
@@ -664,3 +817,10 @@ def _stars(score: int) -> str:
 
 def _chunks(values: list[NewsArticle], size: int) -> list[list[NewsArticle]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
+
+
+def _group_research_changes(changes: list[ResearchChange]) -> dict[str, list[ResearchChange]]:
+    grouped: dict[str, list[ResearchChange]] = {}
+    for change in changes:
+        grouped.setdefault(change.theme, []).append(change)
+    return grouped
