@@ -140,6 +140,13 @@ THEME_KEYWORDS = (
 
 NEUTRAL_KEYWORDS = ("수급 확인", "선별 대응", "중립", "혼조")
 
+MARKET_HIGHLIGHT_STYLES = {
+    "market-hl-positive": "color:#0f9f6e;font-weight:1000;",
+    "market-hl-negative": "color:#d84a4a;font-weight:1000;",
+    "market-hl-theme": "color:#0755d8;font-weight:1000;",
+    "market-hl-neutral": "color:#5f6b7a;font-weight:1000;",
+}
+
 
 @dataclass(frozen=True)
 class CardPage:
@@ -241,7 +248,7 @@ class CardNewsRenderer:
             <div class="cover-date">{escape(date_text)}</div>
             <div class="hero-card">
               <span class="hero-label">오늘 시장 한줄 판단</span>
-              <p class="hero-text">{insight}</p>
+              <div class="hero-text">{insight}</div>
             </div>
           </div>
           <div class="footer">
@@ -337,17 +344,16 @@ def build_discord_card_summary(report: DailyReport, image_paths: list[Path]) -> 
     insight = _cover_insight_text(report)
     themes = ", ".join(theme.name for theme in report.theme_scores[:5]) or "주요 테마 산출 대기"
     total_articles = len(_valid_link_articles(report.domestic_articles)) + len(_valid_link_articles(report.overseas_articles))
-    return "\n".join(
-        [
-            f"📰 {report.title}",
-            report.generated_at.strftime("%Y-%m-%d %H:%M"),
-            "",
-            f"오늘 판단: {insight}",
-            f"강세 예상 테마: {themes}",
-            f"선별 기사: {total_articles}개",
-            f"카드뉴스: {len(image_paths)}장 첨부",
-        ]
-    )
+    lines = [
+        f"📰 {report.title}",
+        report.generated_at.strftime("%Y-%m-%d %H:%M"),
+        "",
+        f"오늘 판단: {insight}",
+        f"강세 예상 테마: {themes}",
+        f"선별 기사: {total_articles}개",
+        f"카드뉴스: {len(image_paths)}장 첨부",
+    ]
+    return "\n".join(lines)
 
 
 def _page_header(number: str, title: str, subtitle: str) -> str:
@@ -436,7 +442,10 @@ def _cover_insight_text(report: DailyReport) -> str:
 
 
 def _cover_insight_html(report: DailyReport) -> str:
-    return "<br />".join(_highlight_market_text(line) for line in _cover_insight_lines(report))
+    return "".join(
+        f'<span class="hero-line">{_highlight_market_text(line)}</span>'
+        for line in _cover_insight_lines(report)
+    )
 
 
 def _cover_insight_lines(report: DailyReport) -> list[str]:
@@ -580,7 +589,10 @@ def _highlight_market_text(text: str) -> str:
         matched = next((keyword for keyword in keywords if text.startswith(keyword, index)), None)
         if matched:
             css_class = keyword_classes[matched]
-            highlighted.append(f'<span class="market-hl {css_class}">{escape(matched)}</span>')
+            style = MARKET_HIGHLIGHT_STYLES[css_class]
+            highlighted.append(
+                f'<strong class="market-hl {css_class}" style="{style}">{escape(matched)}</strong>'
+            )
             index += len(matched)
             continue
 
@@ -608,6 +620,22 @@ def _has_final_consonant(text: str) -> bool:
 
 def _change(points: dict[str, float], name: str) -> float:
     return points.get(name, 0.0)
+
+
+def _positive(value: float | None) -> bool:
+    return value is not None and value > 0
+
+
+def _negative(value: float | None) -> bool:
+    return value is not None and value < 0
+
+
+def _above(value: float | None, threshold: float) -> bool:
+    return value is not None and value > threshold
+
+
+def _below(value: float | None, threshold: float) -> bool:
+    return value is not None and value < threshold
 
 
 def _summary_lines(summary: str) -> list[str]:
