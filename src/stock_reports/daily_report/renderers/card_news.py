@@ -8,7 +8,7 @@ from html import escape
 from pathlib import Path
 from urllib.parse import parse_qs, unquote, urlparse
 
-from stock_reports.daily_report.models import DailyReport, MarketDataPoint, NewsArticle, ResearchChange, ThemeScore
+from stock_reports.daily_report.models import DailyReport, MarketDataPoint, NewsArticle, ThemeScore
 
 
 CARD_WIDTH = 1080
@@ -228,16 +228,6 @@ class CardNewsRenderer:
                 number_offset=len(domestic_articles),
             )
         )
-        if report.research_changes:
-            pages.append(
-                CardPage(
-                    "research-page",
-                    self._research_page(
-                        changes=report.research_changes,
-                        page_number=len(pages) + 1,
-                    ),
-                )
-            )
         return pages
 
     def _cover_page(self, report: DailyReport) -> str:
@@ -342,54 +332,22 @@ class CardNewsRenderer:
 
         return pages
 
-    def _research_page(self, changes: list[ResearchChange], page_number: int) -> str:
-        cards = []
-        for theme, theme_changes in _group_research_changes(changes).items():
-            items = "".join(
-                f"""
-                <div class="research-item">
-                  <span class="research-broker">{escape(change.broker)}</span>
-                  <p>{escape(change.summary)}</p>
-                  <span class="research-reason">{escape(change.reason)}</span>
-                </div>
-                """
-                for change in theme_changes[:2]
-            )
-            cards.append(
-                f"""
-                <article class="research-card">
-                  <span class="research-theme">{escape(theme)}</span>
-                  {items}
-                </article>
-                """
-            )
-
-        return f"""
-        <section class="frame">
-          {_page_header(f"{page_number:02d}", "오늘 리서치 변화", "기관 시각 변화가 감지된 테마만 요약")}
-          <div class="research-list">
-            {''.join(cards)}
-          </div>
-        </section>
-        """
-
 
 def build_discord_card_summary(report: DailyReport, image_paths: list[Path]) -> str:
     insight = _cover_insight_text(report)
     themes = ", ".join(theme.name for theme in report.theme_scores[:5]) or "주요 테마 산출 대기"
     total_articles = len(_valid_link_articles(report.domestic_articles)) + len(_valid_link_articles(report.overseas_articles))
-    lines = [
-        f"📰 {report.title}",
-        report.generated_at.strftime("%Y-%m-%d %H:%M"),
-        "",
-        f"오늘 판단: {insight}",
-        f"강세 예상 테마: {themes}",
-        f"선별 기사: {total_articles}개",
-        f"카드뉴스: {len(image_paths)}장 첨부",
-    ]
-    if report.research_changes:
-        lines.append(f"리서치 변화: {len(report.research_changes)}건")
-    return "\n".join(lines)
+    return "\n".join(
+        [
+            f"📰 {report.title}",
+            report.generated_at.strftime("%Y-%m-%d %H:%M"),
+            "",
+            f"오늘 판단: {insight}",
+            f"강세 예상 테마: {themes}",
+            f"선별 기사: {total_articles}개",
+            f"카드뉴스: {len(image_paths)}장 첨부",
+        ]
+    )
 
 
 def _page_header(number: str, title: str, subtitle: str) -> str:
@@ -652,22 +610,6 @@ def _change(points: dict[str, float], name: str) -> float:
     return points.get(name, 0.0)
 
 
-def _positive(value: float | None) -> bool:
-    return value is not None and value > 0
-
-
-def _negative(value: float | None) -> bool:
-    return value is not None and value < 0
-
-
-def _above(value: float | None, threshold: float) -> bool:
-    return value is not None and value > threshold
-
-
-def _below(value: float | None, threshold: float) -> bool:
-    return value is not None and value < threshold
-
-
 def _summary_lines(summary: str) -> list[str]:
     lines = [line.strip(" •") for line in summary.splitlines() if line.strip(" •")]
     if lines:
@@ -817,10 +759,3 @@ def _stars(score: int) -> str:
 
 def _chunks(values: list[NewsArticle], size: int) -> list[list[NewsArticle]]:
     return [values[index : index + size] for index in range(0, len(values), size)]
-
-
-def _group_research_changes(changes: list[ResearchChange]) -> dict[str, list[ResearchChange]]:
-    grouped: dict[str, list[ResearchChange]] = {}
-    for change in changes:
-        grouped.setdefault(change.theme, []).append(change)
-    return grouped
