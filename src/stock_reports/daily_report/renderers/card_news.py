@@ -1,9 +1,12 @@
 from __future__ import annotations
 
 import math
+import re
 from dataclasses import dataclass
+from difflib import SequenceMatcher
 from html import escape
 from pathlib import Path
+from urllib.parse import parse_qs, unquote, urlparse
 
 from stock_reports.daily_report.models import DailyReport, MarketDataPoint, NewsArticle, ThemeScore
 
@@ -11,6 +14,93 @@ from stock_reports.daily_report.models import DailyReport, MarketDataPoint, News
 CARD_WIDTH = 1080
 CARD_HEIGHT = 1350
 ARTICLES_PER_PAGE = 2
+
+GENERIC_URL_PATHS = {
+    "",
+    "/",
+    "/business",
+    "/finance",
+    "/markets",
+    "/markets/",
+    "/news",
+    "/news/",
+    "/personal-finance",
+    "/personal-finance/",
+}
+
+GENERIC_URL_MARKERS = (
+    "rssindex",
+    "/rss",
+    "/device/rss",
+    "rss.html",
+    "feed",
+)
+
+RELATED_URL_MARKERS = (
+    "related",
+    "recommended",
+    "recommendation",
+    "recirculation",
+    "more-stories",
+    "morestories",
+)
+
+URL_STOPWORDS = {
+    "a",
+    "an",
+    "and",
+    "as",
+    "at",
+    "by",
+    "for",
+    "from",
+    "how",
+    "in",
+    "into",
+    "is",
+    "it",
+    "its",
+    "of",
+    "on",
+    "or",
+    "over",
+    "says",
+    "the",
+    "to",
+    "up",
+    "with",
+    "www",
+    "com",
+    "html",
+    "htm",
+    "rss",
+    "feed",
+    "http",
+    "https",
+    "index",
+    "news",
+    "article",
+    "articles",
+    "story",
+    "stories",
+    "markets",
+    "market",
+    "business",
+    "finance",
+    "latest",
+    "today",
+    "live",
+    "updates",
+    "device",
+    "id",
+    "amp",
+    "review",
+}
+
+URL_MISMATCH_GROUPS = (
+    {"mortgage", "mortgages", "refinance", "lender", "lenders", "housing", "loan", "loans"},
+    {"credit", "card", "cards", "banking", "checking", "savings", "insurance", "personal"},
+)
 
 
 @dataclass(frozen=True)
@@ -73,6 +163,9 @@ class CardNewsRenderer:
         )
 
     def _build_pages(self, report: DailyReport) -> list[CardPage]:
+        domestic_articles = _valid_link_articles(report.domestic_articles)
+        overseas_articles = _valid_link_articles(report.overseas_articles)
+
         pages = [
             CardPage("cover", self._cover_page(report)),
             CardPage("today-market", self._market_page(report)),
@@ -83,7 +176,7 @@ class CardNewsRenderer:
             self._news_pages(
                 title="국내 증시 뉴스",
                 subtitle="장 시작 전 확인할 국내 핵심 재료",
-                articles=report.domestic_articles,
+                articles=domestic_articles,
                 start_page_number=len(pages) + 1,
                 number_offset=0,
             )
@@ -92,9 +185,9 @@ class CardNewsRenderer:
             self._news_pages(
                 title="해외 증시 뉴스",
                 subtitle="미국장과 글로벌 자금 흐름 체크",
-                articles=report.overseas_articles,
+                articles=overseas_articles,
                 start_page_number=len(pages) + 1,
-                number_offset=len(report.domestic_articles),
+                number_offset=len(domestic_articles),
             )
         )
         return pages
@@ -205,7 +298,7 @@ class CardNewsRenderer:
 def build_discord_card_summary(report: DailyReport, image_paths: list[Path]) -> str:
     insight = _cover_insight(report)
     themes = ", ".join(theme.name for theme in report.theme_scores[:5]) or "주요 테마 산출 대기"
-    total_articles = len(report.domestic_articles) + len(report.overseas_articles)
+    total_articles = len(_valid_link_articles(report.domestic_articles)) + len(_valid_link_articles(report.overseas_articles))
     return "\n".join(
         [
             f"📰 {report.title}",
@@ -297,14 +390,129 @@ def _news_card(article: NewsArticle, number: int) -> str:
 
 
 def _cover_insight(report: DailyReport) -> str:
-    lines = report.market_snapshot.summary_lines
-    if len(lines) >= 2:
-        first = lines[0].split(".")[0].strip()
-        second = lines[1].split(".")[0].strip()
-        return f"{first}, {second}"
-    if lines:
-        return lines[0]
+    generated_lines = _summarize_market_points(report.market_snapshot.points)
+    if generated_lines:
+        return generated_lines[0]
+
+    if report.market_snapshot.summary_lines:
+        return report.market_snapshot.summary_lines[0]
+
     return "장 초반 수급과 핵심 테마 확인 필요"
+
+
+def _summarize_market_points(points: list[MarketDataPoint]) -> list[str]:
+    by_name = {point.name: point for point in points}
+
+    nasdaq = _change(by_name, "NASDAQ")
+    sox = _change(by_name, "SOX")
+    vix = _change(by_name, "VIX")
+    us10y = _change(by_name, "US10Y")
+    dxy = _change(by_name, "DXY")
+    usdkrw = _change(by_name, "USD/KRW")
+    copper = _change(by_name, "Copper")
+    wti = _change(by_name, "WTI")
+    bitcoin = _change(by_name, "Bitcoin")
+
+    if not any(value is not None for value in (nasdaq, sox, vix, us10y, dxy, usdkrw, copper, wti, bitcoin)):
+        return []
+
+    risk_on = _positive(nasdaq) + _positive(sox) + _negative(vix)
+    risk_off = _above(vix, 2) or _below(nasdaq, -0.7) or _above(us10y, 1) or _above(usdkrw, 0.5)
+
+    cause = _market_cause(us10y=us10y, dxy=dxy, usdkrw=usdkrw, nasdaq=nasdaq, sox=sox, wti=wti, copper=copper, vix=vix)
+    flow = _market_flow(nasdaq=nasdaq, sox=sox, vix=vix, us10y=us10y, usdkrw=usdkrw, bitcoin=bitcoin)
+    themes = _market_themes(nasdaq=nasdaq, sox=sox, us10y=us10y, copper=copper, wti=wti, risk_off=risk_off)
+
+    if risk_off and risk_on < 2:
+        return [f"{cause}로 {flow}가 커지며 {themes} 중심의 선별 대응이 필요합니다."]
+    return [f"{cause}로 {flow}가 확대되며 {themes} 강세 가능성이 높습니다."]
+
+
+def _market_cause(*, us10y, dxy, usdkrw, nasdaq, sox, wti, copper, vix) -> str:
+    causes: list[str] = []
+    if us10y is not None and us10y <= 0:
+        causes.append("미국채 금리 안정")
+    elif _above(us10y, 1):
+        causes.append("미국채 금리 상승")
+
+    if _negative(dxy) or _below(usdkrw, -0.2):
+        causes.append("달러 약세")
+    elif _above(dxy, 0.3) or _above(usdkrw, 0.5):
+        causes.append("달러 강세")
+
+    if _above(sox, 0.5):
+        causes.append("AI 수요 기대")
+    elif _above(nasdaq, 0.5):
+        causes.append("미국 성장주 강세")
+
+    if _above(copper, 0.5):
+        causes.append("구리 강세")
+    if _above(wti, 0.8):
+        causes.append("유가 상승")
+    if _above(vix, 2):
+        causes.append("변동성 확대")
+
+    return _join_phrases(causes[:3]) if causes else "금리·환율 방향성 혼재"
+
+
+def _market_flow(*, nasdaq, sox, vix, us10y, usdkrw, bitcoin) -> str:
+    if _above(vix, 2) or _below(nasdaq, -0.7) or _above(us10y, 1) or _above(usdkrw, 0.5):
+        return "안전자산 선호와 성장주 관망 심리"
+    if _above(sox, 0.5):
+        return "반도체 중심 매수세"
+    if _above(nasdaq, 0.5) and us10y is not None and us10y <= 0:
+        return "성장주 선호"
+    if _negative(vix) and _positive(bitcoin):
+        return "위험자산 선호"
+    return "수급 확인 심리"
+
+
+def _market_themes(*, nasdaq, sox, us10y, copper, wti, risk_off: bool) -> str:
+    themes: list[str] = []
+    if _above(sox, 0.5):
+        themes.extend(["AI반도체", "HBM"])
+    elif _above(nasdaq, 0.5) and us10y is not None and us10y <= 0:
+        themes.extend(["AI반도체", "성장주"])
+
+    if _above(copper, 0.5):
+        themes.extend(["전력설비", "전력인프라"])
+    if _above(wti, 0.8):
+        themes.append("에너지")
+    if risk_off and not themes:
+        themes.extend(["방산", "배당주"])
+    if not themes:
+        themes.extend(["환율 민감주", "정책 테마"])
+
+    return "·".join(dict.fromkeys(themes[:4]))
+
+
+def _join_phrases(values: list[str]) -> str:
+    if len(values) <= 1:
+        return values[0] if values else "매크로 방향성 혼재"
+    if len(values) == 2:
+        return "과 ".join(values)
+    return f"{', '.join(values[:-1])} 및 {values[-1]}"
+
+
+def _change(points: dict[str, MarketDataPoint], name: str) -> float | None:
+    point = points.get(name)
+    return None if point is None or point.change_pct is None else point.change_pct
+
+
+def _positive(value: float | None) -> bool:
+    return value is not None and value > 0
+
+
+def _negative(value: float | None) -> bool:
+    return value is not None and value < 0
+
+
+def _above(value: float | None, threshold: float) -> bool:
+    return value is not None and value > threshold
+
+
+def _below(value: float | None, threshold: float) -> bool:
+    return value is not None and value < threshold
 
 
 def _summary_lines(summary: str) -> list[str]:
@@ -312,6 +520,137 @@ def _summary_lines(summary: str) -> list[str]:
     if lines:
         return lines
     return [summary.strip()] if summary.strip() else ["원문 기사 확인 필요"]
+
+
+def _valid_link_articles(articles: list[NewsArticle]) -> list[NewsArticle]:
+    valid_articles: list[NewsArticle] = []
+    for article in articles:
+        url = _article_url(article)
+        if not url:
+            continue
+        article.source_url = url
+        article.url = url
+        valid_articles.append(article)
+    return valid_articles
+
+
+def _article_url(article: NewsArticle) -> str | None:
+    for url in _candidate_urls(article):
+        if _is_valid_article_url(article, url):
+            return url
+    return None
+
+
+def _candidate_urls(article: NewsArticle) -> list[str]:
+    candidates: list[str] = []
+    source_url = getattr(article, "source_url", None)
+    if source_url:
+        candidates.extend(_split_urls(source_url))
+    candidates.extend(_split_urls(article.url))
+
+    result: list[str] = []
+    for url in candidates:
+        if url and url not in result:
+            result.append(url)
+    return result
+
+
+def _split_urls(value: str | None) -> list[str]:
+    if not value:
+        return []
+    return [line.strip() for line in value.splitlines() if line.strip()]
+
+
+def _is_valid_article_url(article: NewsArticle, url: str) -> bool:
+    if not url.startswith(("http://", "https://")):
+        return False
+
+    parsed = urlparse(url)
+    if article.source.lower() == "sample" or parsed.netloc.lower() == "example.com":
+        return True
+
+    if _is_generic_url(parsed):
+        return False
+
+    if _is_opaque_article_url(parsed):
+        return True
+
+    url_tokens = _url_tokens(url)
+    title_tokens = _text_tokens(article.title)
+    summary_tokens = _text_tokens(article.summary)
+    text_tokens = title_tokens | summary_tokens
+
+    if not url_tokens or not title_tokens:
+        return False
+
+    if _has_unrelated_topic(url_tokens, text_tokens):
+        return False
+
+    title_overlap = len(title_tokens & url_tokens) / max(1, min(len(title_tokens), len(url_tokens)))
+    sequence_score = SequenceMatcher(
+        None,
+        " ".join(sorted(title_tokens)),
+        " ".join(sorted(_url_tokens(parsed.path))),
+    ).ratio()
+
+    return (title_overlap * 0.8 + sequence_score * 0.2) >= 0.12
+
+
+def _is_generic_url(parsed_url: object) -> bool:
+    parsed = parsed_url if hasattr(parsed_url, "path") else urlparse(str(parsed_url))
+    path = (parsed.path or "").lower()
+    path_and_query = unquote(f"{parsed.path} {parsed.query}").lower()
+    normalized_path = path.rstrip("/") or "/"
+
+    if normalized_path in GENERIC_URL_PATHS:
+        return True
+    if any(marker in path_and_query for marker in GENERIC_URL_MARKERS):
+        return True
+    if any(marker in path_and_query for marker in RELATED_URL_MARKERS):
+        return True
+
+    tokens = _url_tokens(parsed.geturl())
+    if {"rss", "feed", "rssindex"} & tokens:
+        return True
+
+    path_parts = [part for part in normalized_path.split("/") if part]
+    return len(path_parts) <= 1 and any(part in {"news", "markets", "business", "finance"} for part in path_parts)
+
+
+def _is_opaque_article_url(parsed_url: object) -> bool:
+    parsed = parsed_url if hasattr(parsed_url, "path") else urlparse(str(parsed_url))
+    netloc = (parsed.netloc or "").lower()
+    query = parse_qs(parsed.query)
+    path = (parsed.path or "").lower()
+
+    if "naver.com" in netloc and ("article_id" in query or "office_id" in query):
+        return True
+    if "naver.com" in netloc and "/news/" in path and re.search(r"\d{6,}", parsed.query):
+        return True
+    return False
+
+
+def _text_tokens(value: str) -> set[str]:
+    tokens = re.findall(r"[0-9a-z가-힣]+", value.lower())
+    return {token for token in tokens if len(token) >= 2 and token not in URL_STOPWORDS}
+
+
+def _url_tokens(value: str) -> set[str]:
+    parsed = urlparse(value)
+    decoded = unquote(f"{parsed.path} {parsed.query}").lower()
+    tokens = re.findall(r"[0-9a-z가-힣]+", decoded)
+    return {
+        token
+        for token in tokens
+        if len(token) >= 2 and not token.isdigit() and token not in URL_STOPWORDS
+    }
+
+
+def _has_unrelated_topic(url_tokens: set[str], text_tokens: set[str]) -> bool:
+    for topic_tokens in URL_MISMATCH_GROUPS:
+        if url_tokens & topic_tokens and not text_tokens & topic_tokens:
+            return True
+    return False
 
 
 def _theme_star_score(score: int) -> int:
