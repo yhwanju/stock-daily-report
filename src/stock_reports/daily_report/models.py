@@ -28,8 +28,13 @@ class NewsArticle:
     source: str
     market: str
     published_at: datetime | None = None
+    source_url: str | None = None
     themes: list[str] = field(default_factory=list)
     impact_score: int = 1
+
+    def __post_init__(self) -> None:
+        if self.source_url is None:
+            self.source_url = self.url
 
 
 @dataclass
