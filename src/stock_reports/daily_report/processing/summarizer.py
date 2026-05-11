@@ -3,6 +3,7 @@ from __future__ import annotations
 import re
 
 from stock_reports.daily_report.models import NewsArticle
+from stock_reports.daily_report.processing.theme_classifier import theme_label
 
 
 class ArticleSummarizer:
@@ -13,12 +14,12 @@ class ArticleSummarizer:
         max_lines: int = 5,
     ) -> list[NewsArticle]:
         for article in articles:
-            article.title = _compact_text(article.title, limit=88)
+            article.title = _compact_text(article.title, limit=160)
             article.summary = "\n".join(
                 self.summarize_one(
                     article,
-                    preferred_lines=preferred_lines,
-                    max_lines=max_lines,
+                    preferred_lines=min(preferred_lines, 3),
+                    max_lines=min(max_lines, 3),
                 )
             )
         return articles
@@ -32,17 +33,11 @@ class ArticleSummarizer:
         preferred_lines = max(1, min(preferred_lines, max_lines))
         source_lines = _split_sentences(article.summary)
         first_line = _first_useful_line(source_lines, article.title)
-        themes = " / ".join(article.themes[:4]) if article.themes else "시장 일반"
-
-        lines = [
-            _compact_text(first_line, limit=118),
-            _compact_text(f"{themes} 관련 자금 흐름과 업종 수급에 영향 가능.", limit=118),
-            _compact_text(_impact_context(article.impact_score), limit=118),
-        ]
-
-        if len(article.url.splitlines()) >= 2 and len(lines) < max_lines:
-            lines.append("비슷한 흐름의 복수 기사가 병합되어 테마 지속성 확인 필요.")
-
+        themes = [theme_label(theme) for theme in article.themes[:2]] or ["시장 전반"]
+        event_line = _compact_text(_event_line(first_line, article.title), limit=82)
+        market_line = _compact_text(_market_impact_line(article.impact_score), limit=82)
+        theme_line = _compact_text(_theme_action_line(themes, article), limit=82)
+        lines = [event_line, market_line, theme_line]
         return lines[:preferred_lines] if len(lines) >= preferred_lines else lines[:max_lines]
 
 
@@ -74,6 +69,53 @@ def _impact_context(score: int) -> str:
     if score == 2:
         return "특정 종목 또는 제한된 업종 중심의 영향으로 선별 접근 필요."
     return "현재 기준 시장 영향은 제한적이며 후속 확인이 필요."
+
+
+def _event_line(first_line: str, title: str) -> str:
+    source = first_line.strip() or title.strip()
+    source = re.sub(r"\s+", " ", source)
+    if source.endswith(("다", "요", ".")):
+        return source
+    return f"{source} 이슈가 부각됐습니다."
+
+
+def _market_impact_line(score: int) -> str:
+    if score >= 5:
+        return "지수 전반 투자심리에 영향을 줄 수 있어 변동성 확대 가능성이 큽니다."
+    if score == 4:
+        return "관련 업종으로 매수세가 번질 수 있어 강세 가능성을 열어둬야 합니다."
+    if score == 3:
+        return "테마 중심 단기 매수세 유입 가능성이 있어 종목별 탄력 차이가 커질 수 있습니다."
+    if score == 2:
+        return "개별 종목 중심으로 반응할 가능성이 높아 선별 접근이 유효합니다."
+    return "현재 시장 파급력은 제한적이지만 후속 뉴스 확인이 필요합니다."
+
+
+def _theme_action_line(themes: list[str], article: NewsArticle) -> str:
+    focus = "·".join(themes[:2])
+    context = _context_phrase(themes=focus, score=article.impact_score, article=article)
+    return context
+
+
+def _context_phrase(themes: str, score: int, article: NewsArticle) -> str:
+    text = f"{article.title} {article.summary}".lower()
+    if any(token in text for token in ("실적", "earnings", "surprise", "가이던스 상향")):
+        return f"{themes} 관련 종목 투자심리 개선 가능성."
+    if any(token in text for token in ("구조조정", "restructuring", "감원", "layoff")):
+        return f"{themes} 관련 종목 변동성 확대 가능성."
+    if any(token in text for token in ("업황 둔화", "demand slowdown", "수요 둔화", "침체")):
+        return f"{themes} 관련 종목 변동성 확대 가능성."
+    if any(token in text for token in ("금리 부담", "고금리", "higher rates", "yield spike")):
+        return f"{themes} 관련 매수세 유입 여부 확인 필요."
+
+    # 기본 문장: 금지 표현(자금 흐름/업종 수급/영향 가능) 미사용
+    if score >= 5:
+        return f"{themes} 관련 매수세 유입 여부 확인 필요."
+    if score == 4:
+        return f"{themes} 관련 강세 흐름 이어질 가능성."
+    if score == 3:
+        return f"{themes} 관련 종목 투자심리 개선 가능성."
+    return f"{themes} 관련 종목 변동성 확대 가능성."
 
 
 def _compact_text(value: str, limit: int) -> str:
