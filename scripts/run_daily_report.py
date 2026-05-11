@@ -29,7 +29,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--sample-data", action="store_true", help="Use built-in sample data.")
     parser.add_argument(
         "--template",
-        choices=("markdown", "card_news"),
+        choices=("markdown", "card_news", "research_update"),
         default="markdown",
         help="Output template to render.",
     )
@@ -61,6 +61,11 @@ def main() -> None:
         return
 
     if args.once or not args.schedule:
+        if args.template == "research_update":
+            message = service.run_research_update(send=should_send)
+            if message and (args.dry_run or not should_send):
+                print(message)
+            return
         report_text = service.run_once(
             send=should_send,
             use_sample_data=args.sample_data,
