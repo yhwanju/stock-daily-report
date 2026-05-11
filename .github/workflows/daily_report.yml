@@ -1,6 +1,6 @@
 name: Daily Stock Report
 
-"on":
+on:
   workflow_dispatch:
   schedule:
     # 07:45 KST on weekdays = 22:45 UTC on Sunday-Thursday.
@@ -27,6 +27,14 @@ jobs:
     steps:
       - name: Checkout repository
         uses: actions/checkout@v4
+
+      - name: Debug trigger context (UTC/KST)
+        run: |
+          echo "Trigger event: ${GITHUB_EVENT_NAME}"
+          echo "Current branch: ${GITHUB_REF_NAME}"
+          echo "Workflow file path: ${GITHUB_WORKFLOW_REF}"
+          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
+          echo "Calculated KST time: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')"
 
       - name: Set up Python
         uses: actions/setup-python@v5
