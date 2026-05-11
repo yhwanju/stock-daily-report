@@ -47,39 +47,70 @@ class MarketDataCollector:
 
 def _summarize_market(points: list[MarketDataPoint]) -> list[str]:
     by_name = {point.name: point for point in points}
+    if not any(point.change_pct is not None for point in points):
+        return [
+            "시장 데이터 수집 대기 상태입니다. 지수·환율·금리 확인 후 장초반 대응이 필요합니다.",
+            "테마 판단은 뉴스 강도와 대장주 거래대금으로 선별해야 합니다.",
+            "데이터가 들어오면 SOX, 원/달러, 미국채 10년물 조합을 먼저 확인합니다.",
+        ]
 
     nasdaq = _change(by_name, "NASDAQ")
     sox = _change(by_name, "SOX")
     vix = _change(by_name, "VIX")
     us10y = _change(by_name, "US10Y")
+    dxy = _change(by_name, "DXY")
     copper = _change(by_name, "Copper")
+    wti = _change(by_name, "WTI")
+    bitcoin = _change(by_name, "Bitcoin")
     usdkrw = _change(by_name, "USD/KRW")
 
+    return [
+        _market_temperature_line(nasdaq=nasdaq, sox=sox, vix=vix, us10y=us10y, usdkrw=usdkrw),
+        _theme_hint_line(sox=sox, copper=copper, wti=wti, bitcoin=bitcoin, vix=vix),
+        _macro_check_line(us10y=us10y, dxy=dxy, usdkrw=usdkrw),
+    ]
+
+
+def _market_temperature_line(
+    *,
+    nasdaq: float,
+    sox: float,
+    vix: float,
+    us10y: float,
+    usdkrw: float,
+) -> str:
     risk_on = (nasdaq > 0) + (sox > 0) + (vix < 0)
-    lines: list[str] = []
+    risk_pressure = (vix > 2) + (nasdaq < -0.7) + (us10y > 1) + (usdkrw > 0.5)
 
+    if risk_pressure >= 2:
+        return "변동성 경계 구간입니다. 지수 하락 폭, 환율, VIX 안정 여부를 먼저 확인해야 합니다."
+    if risk_on >= 2 and sox > 0.5:
+        return "위험선호가 살아 있고 반도체 지수가 앞서갑니다. 국내 AI반도체와 장비주는 장초반 거래대금 확인이 필요합니다."
     if risk_on >= 2:
-        lines.append("위험선호 우세. 성장주와 반도체 중심의 매수 심리 확인 필요.")
-    elif vix > 2 or nasdaq < -0.7:
-        lines.append("위험회피 우세. 변동성 확대 구간에서는 방어적 접근 필요.")
-    else:
-        lines.append("중립적 시장 흐름. 장 초반 수급과 환율 방향성이 중요.")
+        return "위험선호가 우위입니다. 성장주와 고베타주는 장초반 거래대금이 붙는지 봐야 합니다."
+    return "방향성이 엇갈립니다. 지수보다 환율, 금리, 선물 흐름을 먼저 확인하는 장입니다."
 
+
+def _theme_hint_line(*, sox: float, copper: float, wti: float, bitcoin: float, vix: float) -> str:
+    if sox > 0.5 and copper > 0.5:
+        return "SOX와 구리가 함께 강합니다. AI반도체, HBM, 전력설비를 같은 바구니로 점검해야 합니다."
     if sox > 0.5:
-        lines.append("AI반도체·HBM·전력설비 테마 강세 가능성.")
-    elif copper > 0.5:
-        lines.append("구리 강세로 전력인프라·산업재 관심 유지 가능.")
-    else:
-        lines.append("강세 테마는 뉴스 모멘텀과 외국인 수급 확인 필요.")
+        return "SOX 강세가 뚜렷합니다. AI반도체·HBM·장비주가 장초반 주도권을 잡는지 확인해야 합니다."
+    if copper > 0.5:
+        return "구리 강세가 이어집니다. 전력인프라·전선·변압기 쪽 후속 뉴스가 중요합니다."
+    if wti > 0.8:
+        return "유가가 강합니다. 정유·화학보다 비용 부담 업종까지 함께 점검해야 합니다."
+    if bitcoin > 1.5 and vix < 0:
+        return "비트코인 반등과 VIX 하락이 겹쳤습니다. 성장주 반응 강도를 확인해야 합니다."
+    return "테마는 뉴스 강도와 대장주 거래대금으로 선별해야 합니다."
 
-    if us10y <= 0 and usdkrw <= 0:
-        lines.append("금리와 환율 안정 시 성장주 우호적 흐름 지속 가능.")
-    elif us10y > 1 or usdkrw > 0.5:
-        lines.append("금리·환율 부담이 커질 경우 밸류에이션 민감 업종은 주의.")
-    else:
-        lines.append("금리·환율은 뚜렷한 방향성보다 장중 변동성 점검 필요.")
 
-    return lines[:3]
+def _macro_check_line(*, us10y: float, dxy: float, usdkrw: float) -> str:
+    if us10y <= 0 and dxy <= 0 and usdkrw <= 0:
+        return "금리와 달러가 안정적이면 성장주 반등이 이어질 여지가 있습니다."
+    if us10y > 1 or dxy > 0.3 or usdkrw > 0.5:
+        return "금리·환율 부담이 커진 구간입니다. 밸류에이션 민감 업종은 추격을 늦춰야 합니다."
+    return "금리·환율은 방향성이 뚜렷하지 않습니다. 장중 변동성 확대 여부를 확인해야 합니다."
 
 
 def _change(points: dict[str, MarketDataPoint], name: str) -> float:
