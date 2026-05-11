@@ -5,6 +5,8 @@ on:
   schedule:
     # 07:45 KST on weekdays = 22:45 UTC on Sunday-Thursday.
     - cron: "45 22 * * 0-4"
+    # 07:50 KST on weekdays = 22:50 UTC on Sunday-Thursday.
+    - cron: "50 22 * * 0-4"
 
 permissions:
   contents: read
@@ -15,6 +17,7 @@ concurrency:
 
 jobs:
   send-daily-report:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '45 22 * * 0-4'
     name: Build and send card news report
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -76,3 +79,46 @@ jobs:
           path: output/
           if-no-files-found: warn
           retention-days: 7
+
+  send-research-update:
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '50 22 * * 0-4'
+    name: Send research update brief
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+
+    env:
+      TZ: Asia/Seoul
+      PYTHONUNBUFFERED: "1"
+      DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: "pip"
+
+      - name: Install Python dependencies
+        run: |
+          python -m pip install --upgrade pip
+          pip install -r requirements.txt
+
+      - name: Validate Discord webhook secret
+        run: |
+          if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
+            echo "::error::DISCORD_WEBHOOK_URL secret is not configured."
+            exit 1
+          fi
+
+      - name: Generate and conditionally send research update
+        run: |
+          set -Eeuo pipefail
+          msg="$(python scripts/run_daily_report.py --once --template research_update --dry-run || true)"
+          if [ -z "${msg}" ]; then
+            echo "No meaningful research changes detected. Skip sending."
+            exit 0
+          fi
+          python scripts/run_daily_report.py --once --template research_update --send
