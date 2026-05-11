@@ -113,7 +113,7 @@ def _context_phrase(themes: str, score: int, article: NewsArticle) -> str:
     if any(token in text for token in ("금리 부담", "고금리", "higher rates", "yield spike")):
         return f"{themes} 관련 매수세 유입 여부 확인 필요."
 
-    # 기본 문장: 금지 표현(자금 흐름/업종 수급/영향 가능) 미사용
+    # 기본 문장: 모호한 반복 표현 대신 기사별 확인 포인트를 남긴다.
     if score >= 5:
         return f"{themes} 관련 매수세 유입 여부 확인 필요."
     if score == 4:
