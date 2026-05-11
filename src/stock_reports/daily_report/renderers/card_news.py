@@ -229,7 +229,7 @@ class CardNewsRenderer:
         pages.extend(
             self._news_pages(
                 title="해외 증시 뉴스",
-                subtitle="미국장과 글로벌 자금 흐름 체크",
+                subtitle="미국장과 글로벌 시장 흐름 체크",
                 articles=overseas_articles,
                 start_page_number=len(pages) + 1,
                 number_offset=len(domestic_articles),
