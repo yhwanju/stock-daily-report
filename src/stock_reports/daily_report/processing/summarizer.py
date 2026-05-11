@@ -3,7 +3,6 @@ from __future__ import annotations
 import re
 
 from stock_reports.daily_report.models import NewsArticle
-from stock_reports.daily_report.processing.theme_classifier import theme_label
 
 
 class ArticleSummarizer:
@@ -33,7 +32,7 @@ class ArticleSummarizer:
         preferred_lines = max(1, min(preferred_lines, max_lines))
         source_lines = _split_sentences(article.summary)
         first_line = _first_useful_line(source_lines, article.title)
-        themes = [theme_label(theme) for theme in article.themes[:2]] or ["시장 전반"]
+        themes = [_theme_label(theme) for theme in article.themes[:2]] or ["시장 전반"]
         event_line = _compact_text(_event_line(first_line, article.title), limit=82)
         market_line = _compact_text(_market_impact_line(article.impact_score), limit=82)
         theme_line = _compact_text(_theme_action_line(themes, article), limit=82)
@@ -127,3 +126,31 @@ def _compact_text(value: str, limit: int) -> str:
 
 def _normalize(value: str) -> str:
     return re.sub(r"[^0-9a-z가-힣]+", "", value.lower())
+
+
+def _theme_label(theme: str) -> str:
+    labels = {
+        "금리/FOMC": "금리 민감주",
+        "CPI/물가": "소비재·유통",
+        "환율/달러": "수출주·원자재",
+        "외국인 수급": "대형주",
+        "AI반도체": "AI반도체",
+        "HBM": "메모리반도체",
+        "전력설비": "전력설비",
+        "원전": "원전",
+        "ESS": "ESS",
+        "우주항공": "우주항공",
+        "방산": "방산",
+        "유가": "정유·화학",
+        "구리/전력인프라": "전력인프라",
+        "조선": "조선",
+        "2차전지": "2차전지",
+        "자동차": "자동차·부품",
+        "바이오": "바이오",
+        "로봇": "로봇",
+        "정부 정책": "정책 수혜주",
+        "대형 수주": "수주 모멘텀",
+        "실적": "실적주",
+        "가상자산/위험선호": "증권·성장주",
+    }
+    return labels.get(theme, theme)
