@@ -10,6 +10,7 @@
 - RESEARCH UPDATE 자연스러운 의역 및 테마 fallback 개선
 - TODAY MARKET 시장 조합별 해석 보강
 - GitHub Actions Playwright Chromium 캐시 적용
+- 출력 경로 금지 표현 정리
 
 ## 현재 개선 중
 - 다음 자동 발송 결과 기준 문장 반복 여부 점검
