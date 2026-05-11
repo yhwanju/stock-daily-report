@@ -9,6 +9,10 @@ from stock_reports.daily_report.data_sources.news import NewsCollector
 from stock_reports.daily_report.models import DailyReport, NewsArticle
 from stock_reports.daily_report.processing.deduplication import merge_similar_articles
 from stock_reports.daily_report.processing.scoring import ImpactScorer, select_report_articles
+from stock_reports.daily_report.processing.research_update import (
+    build_research_update_text,
+    select_research_updates,
+)
 from stock_reports.daily_report.processing.summarizer import ArticleSummarizer
 from stock_reports.daily_report.processing.theme_classifier import ThemeClassifier
 from stock_reports.daily_report.renderers.card_news import CardNewsRenderer, build_discord_card_summary
@@ -73,6 +77,22 @@ class DailyReportService:
             return f"{report_text}\n\n[card_news PNG]\n{paths}"
 
         return report_text
+
+    def run_research_update(self, send: bool = False) -> str | None:
+        articles = self.news_collector.collect(self.config.news_sources)
+        if not articles:
+            return None
+        articles = self.theme_classifier.classify(articles)
+        articles = self.impact_scorer.score(articles)
+        selected = select_research_updates(articles, max_items=5)
+        message = build_research_update_text(selected)
+        if not message:
+            return None
+        if send:
+            if not self.config.discord.webhook_url:
+                raise RuntimeError("DISCORD_WEBHOOK_URL is not configured.")
+            DiscordWebhookClient(self.config.discord.webhook_url).send_text(message)
+        return message
 
     def build_report(
         self,
