@@ -1,8 +1,12 @@
 from __future__ import annotations
 
 import argparse
+import os
 import sys
+from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 ROOT_DIR = Path(__file__).resolve().parents[1]
@@ -13,6 +17,28 @@ if str(SRC_DIR) not in sys.path:
 from stock_reports.core.config import load_app_config
 from stock_reports.daily_report.scheduler import start_weekday_schedule
 from stock_reports.daily_report.service import DailyReportService
+
+
+KST = ZoneInfo("Asia/Seoul")
+SCHEDULE_GUARD_START_MINUTE = 7 * 60 + 40
+SCHEDULE_GUARD_END_MINUTE = 8 * 60 + 10
+SCHEDULE_GUARD_BLOCK_MESSAGE = (
+    "[stock-manager] schedule 실행 시간이 허용 범위가 아니므로 리포트 발송을 생략합니다."
+)
+
+
+@dataclass(frozen=True)
+class ScheduleGuardContext:
+    event_name: str
+    github_ref: str
+    utc_now: datetime
+    kst_now: datetime
+    is_schedule_event: bool
+    is_allowed_time: bool
+
+    @property
+    def passed(self) -> bool:
+        return not self.is_schedule_event or self.is_allowed_time
 
 
 def parse_args() -> argparse.Namespace:
@@ -41,6 +67,43 @@ def parse_args() -> argparse.Namespace:
     return parser.parse_args()
 
 
+def _build_schedule_guard_context(now_utc: datetime | None = None) -> ScheduleGuardContext:
+    if now_utc is None:
+        now_utc = datetime.now(timezone.utc)
+    elif now_utc.tzinfo is None:
+        now_utc = now_utc.replace(tzinfo=timezone.utc)
+    else:
+        now_utc = now_utc.astimezone(timezone.utc)
+
+    kst_now = now_utc.astimezone(KST)
+    kst_minute = kst_now.hour * 60 + kst_now.minute
+    is_allowed_time = SCHEDULE_GUARD_START_MINUTE <= kst_minute <= SCHEDULE_GUARD_END_MINUTE
+    event_name = os.getenv("GITHUB_EVENT_NAME", "")
+
+    return ScheduleGuardContext(
+        event_name=event_name,
+        github_ref=os.getenv("GITHUB_REF", ""),
+        utc_now=now_utc,
+        kst_now=kst_now,
+        is_schedule_event=event_name == "schedule",
+        is_allowed_time=is_allowed_time,
+    )
+
+
+def _format_log_time(value: datetime) -> str:
+    return value.strftime("%Y-%m-%d %H:%M:%S %Z")
+
+
+def _log_schedule_guard(context: ScheduleGuardContext) -> None:
+    print(f"[stock-manager] GitHub event name: {context.event_name or '(unset)'}")
+    print(f"[stock-manager] GitHub ref: {context.github_ref or '(unset)'}")
+    print(f"[stock-manager] 현재 UTC 시간: {_format_log_time(context.utc_now)}")
+    print(f"[stock-manager] 현재 KST 시간: {_format_log_time(context.kst_now)}")
+    print(f"[stock-manager] schedule 이벤트 여부: {context.is_schedule_event}")
+    status = "통과" if context.passed else "차단"
+    print(f"[stock-manager] 시간 가드 통과/차단 여부: {status}")
+
+
 def main() -> None:
     args = parse_args()
     config = load_app_config(Path(args.config))
@@ -48,6 +111,11 @@ def main() -> None:
     output_dir = Path(args.output_dir)
 
     should_send = args.send and not args.dry_run
+    schedule_guard = _build_schedule_guard_context()
+    _log_schedule_guard(schedule_guard)
+    if should_send and not schedule_guard.passed:
+        print(SCHEDULE_GUARD_BLOCK_MESSAGE)
+        return
 
     if args.schedule:
         start_weekday_schedule(
