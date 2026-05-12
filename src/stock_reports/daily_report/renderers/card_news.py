@@ -372,7 +372,10 @@ def _metric_row(point: MarketDataPoint | None, fallback_name: str) -> str:
     if point is None or point.value is None:
         return f"""
         <div class="metric-row">
-          <span class="metric-name">{escape(fallback_name)}</span>
+          <span class="metric-name">
+            {escape(fallback_name)}
+            <span style="display:block;margin-top:4px;color:#5f6b7a;font-size:15px;font-weight:800;line-height:1.25;">데이터 확인 필요</span>
+          </span>
           <span class="metric-value flat">-</span>
         </div>
         """
@@ -386,15 +389,52 @@ def _metric_row(point: MarketDataPoint | None, fallback_name: str) -> str:
         sign = "+" if change >= 0 else ""
         change_text = f"{sign}{change:.2f}%"
 
+    note = _metric_interpretation(point.name, change)
+
     return f"""
     <div class="metric-row">
-      <span class="metric-name">{escape(point.name)}</span>
+      <span class="metric-name">
+        {escape(point.name)}
+        <span style="display:block;margin-top:4px;color:#5f6b7a;font-size:15px;font-weight:800;line-height:1.25;">{escape(note)}</span>
+      </span>
       <span class="metric-value {change_class}">
         {point.value:,.2f}
         <span class="metric-change {change_class}">{escape(change_text)}</span>
       </span>
     </div>
     """
+
+
+def _metric_interpretation(name: str, change: float | None) -> str:
+    if change is None:
+        return "방향성 확인 필요"
+
+    if name == "KOSPI":
+        return "국내 대형주 투자심리 확인" if change >= 0 else "대형주 관망 심리 확대"
+    if name == "KOSDAQ":
+        return "성장주 매수세 유입 여부" if change >= 0 else "성장주 변동성 확대 가능성"
+    if name == "NASDAQ":
+        return "미국 성장주 투자심리 개선" if change >= 0 else "성장주 부담 확대"
+    if name == "SOX":
+        return "AI반도체·HBM 관심 유지" if change >= 0 else "반도체주 변동성 체크"
+    if name == "USD/KRW":
+        return "원화 약세, 외국인 매수 부담" if change >= 0 else "원화 강세, 외국인 매수 기대"
+    if name == "US10Y":
+        return "금리 상승, 성장주 부담" if change >= 0 else "금리 하락, 성장주 우호적"
+    if name == "DXY":
+        return "달러 강세, 위험자산 부담" if change >= 0 else "달러 약세, 투자심리 개선"
+    if name == "WTI":
+        return "에너지·정유 관심 유지" if change >= 0 else "인플레 부담 완화 기대"
+    if name == "Gold":
+        return "안전자산 선호 확인" if change >= 0 else "위험자산 선호 회복 여부"
+    if name == "Copper":
+        return "전력인프라·경기민감주 체크" if change >= 0 else "경기민감주 모멘텀 둔화"
+    if name == "VIX":
+        return "변동성 확대 가능성" if change >= 0 else "위험회피 완화 신호"
+    if name == "Bitcoin":
+        return "위험자산 선호 확인" if change >= 0 else "투기심리 둔화 체크"
+
+    return "장중 방향성 확인 필요"
 
 
 def _theme_card(theme: ThemeScore) -> str:
