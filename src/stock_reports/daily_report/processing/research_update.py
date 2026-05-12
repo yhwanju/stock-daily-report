@@ -44,31 +44,34 @@ THEME_FALLBACK_RULES: tuple[tuple[str, tuple[str, ...]], ...] = (
 THEME_SURGE_THRESHOLD = 3
 
 OPINION_TOKENS = ("jim cramer", "opinion", "commentary", "column")
-INSTITUTIONAL_TOKENS = ("goldman", "morgan stanley", "jp morgan", "reuters", "brokerage", "institutional")
 NEGATIVE_TOKENS = ("downgrade", "target price cut", "price target cut", "cut its rating", "하향", "둔화", "slowdown")
 POSITIVE_TOKENS = ("upgrade", "raised", "outlook", "상향", "개선")
 
 
 def select_research_updates(articles: list[NewsArticle], max_items: int = 5) -> list[NewsArticle]:
     matches: list[NewsArticle] = []
+
     for article in articles:
         text = _article_text(article)
-        if not _matching_change_label(text):
-            continue
-        if _article_watch_theme(article):
+        if _matching_change_label(text) and _article_watch_theme(article):
             matches.append(article)
 
     if len(matches) >= max_items:
         return _dedupe(matches)[:max_items]
 
     surge_themes = _surge_themes(articles)
+
     for article in articles:
         if article in matches:
             continue
+
         theme = _article_watch_theme(article)
-        if theme is None or theme not in surge_themes:
+        if theme is None:
             continue
-        matches.append(article)
+
+        if theme in surge_themes:
+            matches.append(article)
+
         if len(matches) >= max_items:
             break
 
@@ -80,86 +83,102 @@ def build_research_update_text(articles: list[NewsArticle]) -> str | None:
         return None
 
     by_theme: dict[str, list[NewsArticle]] = {}
+
     for article in articles:
         theme = _article_watch_theme(article) or "기타"
         by_theme.setdefault(theme, []).append(article)
 
     lines = ["📈 RESEARCH UPDATE 07:50", ""]
+
     for theme, grouped in by_theme.items():
         market_label = _market_label(grouped)
         lines.append(f"[{_theme_label(theme)} | {market_label}]")
+
         for article in grouped[:2]:
-            lines.extend(_brief_lines(article, theme))
-        lines.append("")
+            lines.extend(_article_block(article, theme))
+            lines.append("")
+
     return "\n".join(lines).strip()
 
 
-def _brief_lines(article: NewsArticle, theme: str) -> list[str]:
-    core = _core_message(article, theme)
-    market = _market_impact(article, theme)
-    watch = _watchpoint(article, theme)
-    source = _source_hint(article)
+def _article_block(article: NewsArticle, theme: str) -> list[str]:
+    source = article.source or "Unknown"
+    title = _short_title(article.title, limit=88)
+
     return [
-        f"- {core}",
-        f"  · {market}",
-        f"  · {watch}{source}",
+        f"- {source}:",
+        f"  {title}",
+        "",
+        f"  {_market_interpretation(article, theme)}",
+        f"  {_watchpoint(article, theme)}",
     ]
 
 
-def _core_message(article: NewsArticle, theme: str) -> str:
-    text = _article_text(article)
-    change = _matching_change_label(text)
-    topic = _topic_phrase(text, theme)
-
-    if any(token in text for token in OPINION_TOKENS):
-        return f"개별 의견 중심 코멘트입니다. {topic}을 실제 실적 변수와 분리해 봐야 합니다."
-    if any(token in text for token in INSTITUTIONAL_TOKENS):
-        return f"기관 리포트가 {topic}을 근거로 {change or '전망 변화'}을 제시했습니다."
-    if change:
-        return f"{topic} 관련 {change} 내용입니다."
-    if any(token in text for token in ("ai", "hbm", "data center", "semiconductor", "tsmc")):
-        return "AI 투자와 데이터센터 증설 논리가 다시 확인된 자료입니다."
-    if any(token in text for token in ("power", "grid", "infrastructure", "전력")):
-        return "전력망 투자와 설비 증설 논리가 다시 확인된 자료입니다."
-    if any(token in text for token in ("earnings", "guidance", "estimate", "실적")):
-        return "실적 전망 변화가 핵심인 리포트입니다."
-    return f"{topic}을 중심으로 투자 포인트가 정리된 자료입니다."
-
-
-def _market_impact(article: NewsArticle, theme: str) -> str:
+def _market_interpretation(article: NewsArticle, theme: str) -> str:
     text = _article_text(article)
     label = _theme_label(theme)
+    change = _matching_change_label(text)
 
     if any(token in text for token in OPINION_TOKENS):
-        return "단기 반응은 클 수 있지만, 반복 가능한 근거인지 원문 확인이 먼저입니다."
-    if any(token in text for token in NEGATIVE_TOKENS):
-        return f"{label} 쪽은 추격보다 하락 근거와 실적 민감도 확인이 먼저입니다."
-    if any(token in text for token in POSITIVE_TOKENS):
-        return f"{label} 쪽은 리포트 근거가 장중 거래대금으로 이어지는지 확인해야 합니다."
-    if any(token in text for token in ("ai", "hbm", "data center", "semiconductor", "tsmc")):
-        return "국내 HBM·장비·전력설비까지 기대가 번질 수 있어 대장주 반응을 같이 봐야 합니다."
-    if any(token in text for token in ("power", "grid", "copper", "전력", "구리")):
-        return "전력설비·전선·변압기 쪽 후속 뉴스와 장중 강도 비교가 필요합니다."
-    return f"{label} 기사 수가 늘어난 구간이라 주도주와 거래대금을 함께 확인해야 합니다."
+        return "개별 의견 성격이 강한 코멘트로 시장 전체 영향은 제한적일 수 있습니다. 실제 실적과 수주 흐름 확인이 우선입니다."
+
+    if theme == "기타":
+        return "개별 종목 실적 발표 성격이 강해 시장 전체 영향은 제한적일 수 있습니다."
+
+    if any(token in text for token in ("ai", "hbm", "data center", "semiconductor", "tsmc", "nvidia")):
+        if any(token in text for token in NEGATIVE_TOKENS):
+            return "AI반도체 밸류체인 기대가 일부 약해질 수 있어 HBM·장비주 변동성 확대 여부를 확인할 필요가 있습니다."
+        return "TSMC·AI 서버 수요 기대가 이어지며 AI반도체·HBM 투자심리 유지 가능성이 있습니다. 반도체 장비와 전력설비 흐름도 함께 체크할 필요가 있습니다."
+
+    if any(token in text for token in ("power", "grid", "transformer", "전력", "변압기", "전선")):
+        return "전력망 투자 확대 기대가 유지되며 전선·변압기·전력설비 관련 종목 관심 유지 가능성이 있습니다."
+
+    if any(token in text for token in ("copper", "구리", "infrastructure")):
+        return "구리 가격과 전력인프라 투자 기대가 연결되며 전선·전력기기 섹터 매수세 유입 여부를 확인할 필요가 있습니다."
+
+    if any(token in text for token in ("ess", "battery storage", "energy storage")):
+        return "ESS 투자 확대 기대가 이어질 경우 전력인프라·배터리 장비주 강세 흐름 지속 여부가 중요합니다."
+
+    if any(token in text for token in ("defense", "missile", "방산")):
+        return "방산 수출 기대가 유지되며 실적 기반 수주 모멘텀 종목 중심으로 관심이 이어질 수 있습니다."
+
+    if any(token in text for token in ("shipbuilding", "lng", "조선")):
+        return "LNG선과 조선 발주 기대가 유지될 경우 조선·기자재 섹터 투자심리 개선 가능성이 있습니다."
+
+    if any(token in text for token in ("robot", "automation", "로봇")):
+        return "자동화 투자 확대 기대가 이어질 경우 로봇·FA 관련주 변동성 확대 가능성이 있습니다."
+
+    if any(token in text for token in ("nuclear", "smr", "원전")):
+        return "원전 정책과 전력 수요 확대 기대가 이어지며 SMR·원전 기자재 관련주 관심 유지 가능성이 있습니다."
+
+    if change:
+        return f"{label} 관련 {change} 내용으로 단기 투자심리에 영향을 줄 수 있어 장중 거래대금 반응 확인이 필요합니다."
+
+    return f"{label} 관련 투자 포인트가 재확인된 자료로 관련 종목 강세 흐름 지속 여부를 체크할 필요가 있습니다."
 
 
 def _watchpoint(article: NewsArticle, theme: str) -> str:
     text = _article_text(article)
+
     if "ai" in text or "hbm" in text or "semiconductor" in text:
-        return "체크: HBM·장비·전력설비가 함께 움직이는지"
-    if "ess" in text or "battery storage" in text:
-        return "체크: ESS와 전력인프라 대장주 거래대금"
-    if "power" in text or "grid" in text or "infrastructure" in text or "copper" in text:
-        return "체크: 전선·변압기·구리 가격 동조 여부"
-    if "defense" in text or "missile" in text or "방산" in text:
-        return "체크: 수출 계약과 실적 추정 변화"
-    if "shipbuilding" in text or "lng" in text or "조선" in text:
-        return "체크: LNG선·해양플랜트 발주 뉴스"
-    return f"체크: {_theme_label(theme)} 대장주 거래대금과 후속 리포트"
+        return "반도체 장비·HBM·전력설비 동반 강세 여부 체크 필요."
 
+    if "power" in text or "grid" in text or "transformer" in text:
+        return "전선·변압기·전력기기 대장주 거래대금 체크 필요."
 
-def _source_hint(article: NewsArticle) -> str:
-    return f" (참고: {article.source} | {_short_title(article.title)})"
+    if "ess" in text:
+        return "ESS·전력인프라 동반 움직임 여부 체크 필요."
+
+    if "defense" in text or "방산" in text:
+        return "수출 계약·실적 추정 변화 확인 필요."
+
+    if "shipbuilding" in text or "lng" in text:
+        return "LNG선·해양플랜트 발주 뉴스 체크 필요."
+
+    if theme == "기타":
+        return "개별 종목 중심 뉴스인지 섹터 확산 여부 확인 필요."
+
+    return f"{_theme_label(theme)} 관련 대장주 거래대금과 후속 리포트 체크 필요."
 
 
 def _market_label(articles: list[NewsArticle]) -> str:
@@ -197,47 +216,31 @@ def _article_watch_themes(article: NewsArticle) -> list[str]:
     for theme, keywords in THEME_FALLBACK_RULES:
         if theme in themes:
             continue
+
         if any(keyword.lower() in text for keyword in keywords):
             themes.append(theme)
+
     return themes
-
-
-def _topic_phrase(text: str, theme: str) -> str:
-    if any(token in text for token in ("ai", "hbm", "data center", "semiconductor", "nvidia", "tsmc")):
-        return "AI 서버 투자와 반도체 밸류체인"
-    if any(token in text for token in ("power", "grid", "transformer", "전력", "전선", "변압기")):
-        return "전력망 투자와 설비 증설"
-    if any(token in text for token in ("copper", "구리")):
-        return "구리 가격과 전력인프라"
-    if any(token in text for token in ("ess", "battery storage", "energy storage")):
-        return "전력 저장장치 투자"
-    if any(token in text for token in ("defense", "missile", "방산")):
-        return "방산 수출과 수주"
-    if any(token in text for token in ("shipbuilding", "lng", "조선")):
-        return "선박 발주와 조선 기자재"
-    if any(token in text for token in ("robot", "automation", "로봇")):
-        return "자동화 투자와 로봇"
-    if any(token in text for token in ("nuclear", "smr", "원전")):
-        return "원전 정책과 전력 수요"
-    if any(token in text for token in ("earnings", "guidance", "estimate", "실적")):
-        return "실적 전망"
-    return f"{_theme_label(theme)} 밸류체인"
 
 
 def _surge_themes(articles: list[NewsArticle]) -> set[str]:
     counts: Counter[str] = Counter()
+
     for article in articles:
         for theme in _article_watch_themes(article):
             counts[theme] += 1
+
     return {theme for theme, count in counts.items() if count >= THEME_SURGE_THRESHOLD}
 
 
 def _short_title(title: str, limit: int = 56) -> str:
     cleaned = re.sub(r"\s+", " ", title).strip()
+
     if len(cleaned) <= limit:
         return cleaned
 
     shortened = cleaned[:limit].rstrip()
+
     for separator in (" | ", " - ", ": ", ", "):
         index = shortened.rfind(separator)
         if index >= int(limit * 0.55):
@@ -254,11 +257,15 @@ def _short_title(title: str, limit: int = 56) -> str:
 def _dedupe(articles: list[NewsArticle]) -> list[NewsArticle]:
     seen: set[str] = set()
     result: list[NewsArticle] = []
+
     for article in articles:
         key_source = article.url or article.source_url or article.title
         key = re.sub(r"\s+", " ", key_source).strip().lower()
+
         if key in seen:
             continue
+
         seen.add(key)
         result.append(article)
+
     return result
