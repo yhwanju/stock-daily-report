@@ -3,10 +3,10 @@ name: Daily Stock Report
 on:
   workflow_dispatch:
   schedule:
-    # 07:45 KST on weekdays = 22:45 UTC on Sunday-Thursday.
-    - cron: "45 22 * * 0-4"
-    # 07:50 KST on weekdays = 22:50 UTC on Sunday-Thursday.
-    - cron: "50 22 * * 0-4"
+    # 09:00 KST on weekdays = 00:00 UTC on Monday-Friday.
+    - cron: "0 0 * * 1-5"
+    # 09:05 KST on weekdays = 00:05 UTC on Monday-Friday.
+    - cron: "5 0 * * 1-5"
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   send-daily-report:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '45 22 * * 0-4'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '0 0 * * 1-5'
     name: Build and send card news report
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -31,7 +31,7 @@ jobs:
       - name: Debug trigger context (UTC/KST)
         env:
           EVENT_SCHEDULE: ${{ github.event.schedule || 'workflow_dispatch' }}
-          TARGET_KST_TIME: "07:45"
+          TARGET_KST_TIME: "09:00"
         run: |
           echo "Trigger event: ${GITHUB_EVENT_NAME}"
           echo "Event schedule: ${EVENT_SCHEDULE}"
@@ -45,7 +45,7 @@ jobs:
         id: timing_window
         if: github.event_name == 'schedule'
         env:
-          TARGET_KST_TIME: "07:45"
+          TARGET_KST_TIME: "09:00"
           LATE_GRACE_MINUTES: "15"
         run: |
           set -Eeuo pipefail
@@ -126,7 +126,7 @@ jobs:
           retention-days: 7
 
   send-research-update:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '50 22 * * 0-4'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '5 0 * * 1-5'
     name: Send research update brief
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -140,7 +140,7 @@ jobs:
       - name: Debug trigger context (UTC/KST)
         env:
           EVENT_SCHEDULE: ${{ github.event.schedule || 'workflow_dispatch' }}
-          TARGET_KST_TIME: "07:50"
+          TARGET_KST_TIME: "09:05"
         run: |
           echo "Trigger event: ${GITHUB_EVENT_NAME}"
           echo "Event schedule: ${EVENT_SCHEDULE}"
@@ -154,7 +154,7 @@ jobs:
         id: timing_window
         if: github.event_name == 'schedule'
         env:
-          TARGET_KST_TIME: "07:50"
+          TARGET_KST_TIME: "09:05"
           LATE_GRACE_MINUTES: "15"
         run: |
           set -Eeuo pipefail
