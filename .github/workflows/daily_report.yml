@@ -3,10 +3,10 @@ name: Daily Stock Report
 on:
   workflow_dispatch:
   schedule:
-    # Pre-start for 07:45 KST on weekdays; the job waits before sending.
-    - cron: "30 22 * * 0-4"
-    # Pre-start for 07:50 KST on weekdays; the job waits before sending.
-    - cron: "35 22 * * 0-4"
+    # 07:45 KST on weekdays = 22:45 UTC on Sunday-Thursday.
+    - cron: "45 22 * * 0-4"
+    # 07:50 KST on weekdays = 22:50 UTC on Sunday-Thursday.
+    - cron: "50 22 * * 0-4"
 
 permissions:
   contents: read
@@ -17,7 +17,7 @@ concurrency:
 
 jobs:
   send-daily-report:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '30 22 * * 0-4'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '45 22 * * 0-4'
     name: Build and send card news report
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -41,44 +41,45 @@ jobs:
           echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Calculated KST time: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')"
 
-      - name: Check schedule timing window
-        id: schedule_window
+      - name: Check scheduled timing window
+        id: timing_window
         if: github.event_name == 'schedule'
         env:
           TARGET_KST_TIME: "07:45"
-          LATE_GRACE_MINUTES: "3"
+          LATE_GRACE_MINUTES: "15"
         run: |
           set -Eeuo pipefail
           today_kst="$(TZ=Asia/Seoul date '+%Y-%m-%d')"
           target_epoch="$(TZ=Asia/Seoul date -d "${today_kst} ${TARGET_KST_TIME}:00" '+%s')"
           now_epoch="$(TZ=Asia/Seoul date '+%s')"
           late_seconds=$((now_epoch - target_epoch))
+          echo "late_seconds=${late_seconds}"
           if [ "${late_seconds}" -gt $((LATE_GRACE_MINUTES * 60)) ]; then
-            echo "::warning::Scheduled run is ${late_seconds}s after ${TARGET_KST_TIME} KST; skipping to avoid an afternoon send."
-            echo "should_continue=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::Scheduled run is ${late_seconds}s after ${TARGET_KST_TIME} KST; skipping to avoid a late send."
+            echo "should_send=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          echo "should_continue=true" >> "${GITHUB_OUTPUT}"
+          echo "should_send=true" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout repository
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
       - name: Install Python dependencies
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Cache Playwright browsers
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         id: playwright-cache
         uses: actions/cache@v4
         with:
@@ -88,7 +89,7 @@ jobs:
             playwright-${{ runner.os }}-
 
       - name: Install Chromium and fonts
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-color-emoji
@@ -99,42 +100,15 @@ jobs:
           fi
 
       - name: Validate Discord webhook secret
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         run: |
           if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
             echo "::error::DISCORD_WEBHOOK_URL secret is not configured."
             exit 1
           fi
 
-      - name: Wait until 07:45 KST
-        id: timing_gate
-        if: github.event_name == 'schedule' && steps.schedule_window.outputs.should_continue == 'true'
-        env:
-          TARGET_KST_TIME: "07:45"
-          LATE_GRACE_MINUTES: "3"
-        run: |
-          set -Eeuo pipefail
-          today_kst="$(TZ=Asia/Seoul date '+%Y-%m-%d')"
-          target_epoch="$(TZ=Asia/Seoul date -d "${today_kst} ${TARGET_KST_TIME}:00" '+%s')"
-          now_epoch="$(TZ=Asia/Seoul date '+%s')"
-          wait_seconds=$((target_epoch - now_epoch))
-          if [ "${wait_seconds}" -gt 0 ]; then
-            echo "Waiting ${wait_seconds}s until ${today_kst} ${TARGET_KST_TIME}:00 KST."
-            sleep "${wait_seconds}"
-          fi
-          now_epoch="$(TZ=Asia/Seoul date '+%s')"
-          late_seconds=$((now_epoch - target_epoch))
-          if [ "${late_seconds}" -gt $((LATE_GRACE_MINUTES * 60)) ]; then
-            echo "::warning::Scheduled run reached send gate ${late_seconds}s after target; skipping."
-            echo "should_send=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          echo "should_send=true" >> "${GITHUB_OUTPUT}"
-          echo "Gate passed UTC: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Gate passed KST: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')"
-
       - name: Generate and send daily report
-        if: github.event_name == 'workflow_dispatch' || steps.timing_gate.outputs.should_send == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         run: |
           set -Eeuo pipefail
           trap 'code=$?; echo "::error::Daily report failed at line ${LINENO} with exit code ${code}."; exit ${code}' ERR
@@ -143,7 +117,7 @@ jobs:
           echo "Daily report job finished at $(date '+%Y-%m-%d %H:%M:%S %Z')"
 
       - name: Upload generated report artifacts
-        if: always() && (github.event_name == 'workflow_dispatch' || steps.timing_gate.outputs.should_send == 'true')
+        if: always() && (github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true')
         uses: actions/upload-artifact@v4
         with:
           name: daily-report-output
@@ -152,7 +126,7 @@ jobs:
           retention-days: 7
 
   send-research-update:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '35 22 * * 0-4'
+    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '50 22 * * 0-4'
     name: Send research update brief
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -176,79 +150,53 @@ jobs:
           echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
           echo "Calculated KST time: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')"
 
-      - name: Check schedule timing window
-        id: schedule_window
+      - name: Check scheduled timing window
+        id: timing_window
         if: github.event_name == 'schedule'
         env:
           TARGET_KST_TIME: "07:50"
-          LATE_GRACE_MINUTES: "3"
+          LATE_GRACE_MINUTES: "15"
         run: |
           set -Eeuo pipefail
           today_kst="$(TZ=Asia/Seoul date '+%Y-%m-%d')"
           target_epoch="$(TZ=Asia/Seoul date -d "${today_kst} ${TARGET_KST_TIME}:00" '+%s')"
           now_epoch="$(TZ=Asia/Seoul date '+%s')"
           late_seconds=$((now_epoch - target_epoch))
+          echo "late_seconds=${late_seconds}"
           if [ "${late_seconds}" -gt $((LATE_GRACE_MINUTES * 60)) ]; then
-            echo "::warning::Scheduled run is ${late_seconds}s after ${TARGET_KST_TIME} KST; skipping to avoid an afternoon send."
-            echo "should_continue=false" >> "${GITHUB_OUTPUT}"
+            echo "::warning::Scheduled run is ${late_seconds}s after ${TARGET_KST_TIME} KST; skipping to avoid a late send."
+            echo "should_send=false" >> "${GITHUB_OUTPUT}"
             exit 0
           fi
-          echo "should_continue=true" >> "${GITHUB_OUTPUT}"
+          echo "should_send=true" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout repository
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         uses: actions/checkout@v4
 
       - name: Set up Python
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         uses: actions/setup-python@v5
         with:
           python-version: "3.11"
           cache: "pip"
 
       - name: Install Python dependencies
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
 
       - name: Validate Discord webhook secret
-        if: github.event_name == 'workflow_dispatch' || steps.schedule_window.outputs.should_continue == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         run: |
           if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
             echo "::error::DISCORD_WEBHOOK_URL secret is not configured."
             exit 1
           fi
 
-      - name: Wait until 07:50 KST
-        id: timing_gate
-        if: github.event_name == 'schedule' && steps.schedule_window.outputs.should_continue == 'true'
-        env:
-          TARGET_KST_TIME: "07:50"
-          LATE_GRACE_MINUTES: "3"
-        run: |
-          set -Eeuo pipefail
-          today_kst="$(TZ=Asia/Seoul date '+%Y-%m-%d')"
-          target_epoch="$(TZ=Asia/Seoul date -d "${today_kst} ${TARGET_KST_TIME}:00" '+%s')"
-          now_epoch="$(TZ=Asia/Seoul date '+%s')"
-          wait_seconds=$((target_epoch - now_epoch))
-          if [ "${wait_seconds}" -gt 0 ]; then
-            echo "Waiting ${wait_seconds}s until ${today_kst} ${TARGET_KST_TIME}:00 KST."
-            sleep "${wait_seconds}"
-          fi
-          now_epoch="$(TZ=Asia/Seoul date '+%s')"
-          late_seconds=$((now_epoch - target_epoch))
-          if [ "${late_seconds}" -gt $((LATE_GRACE_MINUTES * 60)) ]; then
-            echo "::warning::Scheduled run reached send gate ${late_seconds}s after target; skipping."
-            echo "should_send=false" >> "${GITHUB_OUTPUT}"
-            exit 0
-          fi
-          echo "should_send=true" >> "${GITHUB_OUTPUT}"
-          echo "Gate passed UTC: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Gate passed KST: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')"
-
       - name: Generate and conditionally send research update
-        if: github.event_name == 'workflow_dispatch' || steps.timing_gate.outputs.should_send == 'true'
+        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         run: |
           set -Eeuo pipefail
           msg="$(python scripts/run_daily_report.py --once --template research_update --dry-run || true)"
