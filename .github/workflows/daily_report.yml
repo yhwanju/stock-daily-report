@@ -3,10 +3,7 @@ name: Daily Stock Report
 on:
   workflow_dispatch:
   schedule:
-    # 09:50 KST on weekdays = 00:50 UTC on Monday-Friday.
-    - cron: "50 0 * * 1-5"
-    # 09:55 KST on weekdays = 00:55 UTC on Monday-Friday.
-    - cron: "55 0 * * 1-5"
+    - cron: "*/10 * * * *"
 
 permissions:
   contents: read
@@ -17,7 +14,6 @@ concurrency:
 
 jobs:
   send-daily-report:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '50 0 * * 1-5'
     name: Build and send card news report
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -28,34 +24,19 @@ jobs:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
     steps:
-      - name: Debug trigger context (UTC/KST)
-        env:
-          EVENT_SCHEDULE: ${{ github.event.schedule || 'workflow_dispatch' }}
-          TARGET_KST_TIME: "09:50"
-        run: |
-          echo "Trigger event: ${GITHUB_EVENT_NAME}"
-          echo "Event schedule: ${EVENT_SCHEDULE}"
-          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Calculated KST time: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')"
-
-      - name: Check scheduled timing window
+      - name: Check KST send window
         id: timing_window
-        if: github.event_name == 'schedule'
-        env:
-          TARGET_KST_TIME: "09:50"
-          LATE_GRACE_MINUTES: "15"
         run: |
-          set -Eeuo pipefail
-          today_kst="$(TZ=Asia/Seoul date '+%Y-%m-%d')"
-          target_epoch="$(TZ=Asia/Seoul date -d "${today_kst} ${TARGET_KST_TIME}:00" '+%s')"
-          now_epoch="$(TZ=Asia/Seoul date '+%s')"
-          late_seconds=$((now_epoch - target_epoch))
-          echo "late_seconds=${late_seconds}"
-          if [ "${late_seconds}" -gt $((LATE_GRACE_MINUTES * 60)) ]; then
-            echo "should_send=false" >> "${GITHUB_OUTPUT}"
-            exit 0
+          current_hm="$(TZ=Asia/Seoul date '+%H:%M')"
+          echo "Current KST=${current_hm}"
+
+          should_send=false
+
+          if [[ "${current_hm}" > "10:39" && "${current_hm}" < "10:50" ]]; then
+            should_send=true
           fi
-          echo "should_send=true" >> "${GITHUB_OUTPUT}"
+
+          echo "should_send=${should_send}" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout repository
         if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
@@ -95,20 +76,12 @@ jobs:
             python -m playwright install --with-deps chromium
           fi
 
-      - name: Validate Discord webhook secret
-        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
-        run: |
-          if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
-            exit 1
-          fi
-
       - name: Generate and send daily report
         if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
         run: |
           python scripts/run_daily_report.py --once --template card_news --send
 
   send-research-update:
-    if: github.event_name == 'workflow_dispatch' || github.event.schedule == '55 0 * * 1-5'
     name: Send research update brief
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -119,34 +92,19 @@ jobs:
       DISCORD_WEBHOOK_URL: ${{ secrets.DISCORD_WEBHOOK_URL }}
 
     steps:
-      - name: Debug trigger context (UTC/KST)
-        env:
-          EVENT_SCHEDULE: ${{ github.event.schedule || 'workflow_dispatch' }}
-          TARGET_KST_TIME: "09:55"
-        run: |
-          echo "Trigger event: ${GITHUB_EVENT_NAME}"
-          echo "Event schedule: ${EVENT_SCHEDULE}"
-          echo "UTC time: $(date -u '+%Y-%m-%d %H:%M:%S UTC')"
-          echo "Calculated KST time: $(TZ=Asia/Seoul date '+%Y-%m-%d %H:%M:%S KST')"
-
-      - name: Check scheduled timing window
+      - name: Check KST send window
         id: timing_window
-        if: github.event_name == 'schedule'
-        env:
-          TARGET_KST_TIME: "09:55"
-          LATE_GRACE_MINUTES: "15"
         run: |
-          set -Eeuo pipefail
-          today_kst="$(TZ=Asia/Seoul date '+%Y-%m-%d')"
-          target_epoch="$(TZ=Asia/Seoul date -d "${today_kst} ${TARGET_KST_TIME}:00" '+%s')"
-          now_epoch="$(TZ=Asia/Seoul date '+%s')"
-          late_seconds=$((now_epoch - target_epoch))
-          echo "late_seconds=${late_seconds}"
-          if [ "${late_seconds}" -gt $((LATE_GRACE_MINUTES * 60)) ]; then
-            echo "should_send=false" >> "${GITHUB_OUTPUT}"
-            exit 0
+          current_hm="$(TZ=Asia/Seoul date '+%H:%M')"
+          echo "Current KST=${current_hm}"
+
+          should_send=false
+
+          if [[ "${current_hm}" > "10:49" && "${current_hm}" < "11:00" ]]; then
+            should_send=true
           fi
-          echo "should_send=true" >> "${GITHUB_OUTPUT}"
+
+          echo "should_send=${should_send}" >> "${GITHUB_OUTPUT}"
 
       - name: Checkout repository
         if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
@@ -164,13 +122,6 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install -r requirements.txt
-
-      - name: Validate Discord webhook secret
-        if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
-        run: |
-          if [ -z "${DISCORD_WEBHOOK_URL}" ]; then
-            exit 1
-          fi
 
       - name: Generate and conditionally send research update
         if: github.event_name == 'workflow_dispatch' || steps.timing_window.outputs.should_send == 'true'
