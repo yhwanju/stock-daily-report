@@ -19,14 +19,49 @@ class MarketDataCollector:
         try:
             import yfinance as yf
 
-            history = yf.Ticker(ticker.symbol).history(period="5d", interval="1d")
-            closes = history["Close"].dropna()
-            if closes.empty:
-                raise ValueError("No close price returned.")
+            ticker_obj = yf.Ticker(ticker.symbol)
 
-            latest = float(closes.iloc[-1]) * ticker.scale
-            previous = float(closes.iloc[-2]) * ticker.scale if len(closes) > 1 else latest
-            change_pct = ((latest - previous) / previous * 100) if previous else None
+            # 실시간/최신 시장 데이터 우선 사용
+            fast_info = getattr(ticker_obj, "fast_info", {}) or {}
+
+            latest_raw = (
+                fast_info.get("lastPrice")
+                or fast_info.get("regularMarketPrice")
+            )
+
+            previous_raw = (
+                fast_info.get("previousClose")
+                or fast_info.get("regularMarketPreviousClose")
+            )
+
+            # fast_info 실패 시 fallback
+            if latest_raw is None or previous_raw is None:
+                history = ticker_obj.history(
+                    period="2d",
+                    interval="1d"
+                )
+
+                closes = history["Close"].dropna()
+
+                if closes.empty:
+                    raise ValueError("No market data returned.")
+
+                latest_raw = float(closes.iloc[-1])
+
+                previous_raw = (
+                    float(closes.iloc[-2])
+                    if len(closes) > 1
+                    else latest_raw
+                )
+
+            latest = float(latest_raw) * ticker.scale
+            previous = float(previous_raw) * ticker.scale
+
+            change_pct = (
+                ((latest - previous) / previous * 100)
+                if previous
+                else None
+            )
 
             return MarketDataPoint(
                 name=ticker.name,
@@ -35,6 +70,7 @@ class MarketDataCollector:
                 change_pct=change_pct,
                 symbol=ticker.symbol,
             )
+
         except Exception:
             return MarketDataPoint(
                 name=ticker.name,
