@@ -56,6 +56,39 @@ INDUSTRY_KEYWORDS = (
     "관세",
 )
 
+EXCLUDED_TOPIC_KEYWORDS = (
+    "credit card",
+    "credit cards",
+    "american express credit cards",
+    "amex credit card",
+    "best credit card",
+    "mortgage",
+    "refinance",
+    "personal finance",
+    "bank account",
+    "savings account",
+    "insurance",
+    "loan rates",
+    "earnings call highlights",
+    "q1 earnings call highlights",
+    "q2 earnings call highlights",
+    "q3 earnings call highlights",
+    "q4 earnings call highlights",
+)
+
+EXCLUDED_URL_KEYWORDS = (
+    "credit-card",
+    "credit-cards",
+    "best-amex-credit-card",
+    "best-american-express-credit-cards",
+    "mortgage",
+    "refinance",
+    "personal-finance",
+    "savings-account",
+    "insurance",
+    "earnings-call-highlights",
+)
+
 
 class ImpactScorer:
     def score(self, articles: list[NewsArticle]) -> list[NewsArticle]:
@@ -64,6 +97,9 @@ class ImpactScorer:
         return articles
 
     def score_one(self, article: NewsArticle) -> int:
+        if _is_excluded_article(article):
+            return 0
+
         text = f"{article.title} {article.summary}".lower()
         score = max((THEME_WEIGHTS.get(theme, 1) for theme in article.themes), default=1)
 
@@ -86,7 +122,7 @@ def select_report_articles(
     hard_limit = max(1, max_articles)
     target_count = min(hard_limit, max(1, recommended_max_articles))
     relevant = _sort_articles(
-        [article for article in articles if article.impact_score >= min_impact_score]
+        [article for article in articles if article.impact_score >= min_impact_score and not _is_excluded_article(article)]
     )
 
     if len(relevant) <= target_count:
@@ -118,8 +154,19 @@ def filter_relevant_articles(
     max_articles: int,
 ) -> list[NewsArticle]:
     return _sort_articles(
-        [article for article in articles if article.impact_score >= min_impact_score]
+        [article for article in articles if article.impact_score >= min_impact_score and not _is_excluded_article(article)]
     )[:max_articles]
+
+
+def _is_excluded_article(article: NewsArticle) -> bool:
+    text = f"{article.title} {article.summary}".lower()
+    url = f"{article.url} {article.source_url}".lower()
+
+    if any(keyword in text for keyword in EXCLUDED_TOPIC_KEYWORDS):
+        return True
+    if any(keyword in url for keyword in EXCLUDED_URL_KEYWORDS):
+        return True
+    return False
 
 
 def _sort_articles(articles: list[NewsArticle]) -> list[NewsArticle]:
