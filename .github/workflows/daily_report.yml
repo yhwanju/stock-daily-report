@@ -68,12 +68,8 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y --no-install-recommends fonts-noto-cjk fonts-noto-color-emoji
-          if [ "${{ steps.playwright-cache.outputs.cache-hit }}" = "true" ]; then
-            python -m playwright install-deps chromium
-          else
-            python -m playwright install --with-deps chromium
-          fi
-
+          python -m playwright install --with-deps chromium
+          
       - name: Generate and send daily report
         if: steps.timing_window.outputs.should_send == 'true'
         run: |
