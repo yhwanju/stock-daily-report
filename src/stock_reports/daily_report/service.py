@@ -15,7 +15,8 @@ from stock_reports.daily_report.processing.research_update import (
 )
 from stock_reports.daily_report.processing.summarizer import ArticleSummarizer
 from stock_reports.daily_report.processing.theme_classifier import ThemeClassifier
-from stock_reports.daily_report.renderers.card_news import CardNewsRenderer, build_discord_card_summary
+from stock_reports.daily_report.renderers.card_news import CardNewsRenderer
+from stock_reports.daily_report.renderers.discord_summary import build_discord_card_summary
 from stock_reports.daily_report.report_builder import DailyReportBuilder
 from stock_reports.daily_report.sample_data import sample_market_snapshot, sample_news_articles
 from stock_reports.integrations.discord import DiscordWebhookClient
